@@ -198,10 +198,7 @@ coverage*.info
 
 # NCrunch
 _NCrunch_*
-<<<<<<< HEAD
-.NCrunch_*
 =======
->>>>>>> 95cfacb (Initial commit.)
 .*crunch*.local.xml
 nCrunchTemp_*
 
