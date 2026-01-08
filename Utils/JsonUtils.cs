@@ -1,6 +1,7 @@
 using System;
 using System.Reflection;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Serialization;
 using UnitySerializationBridge.Core.JSON;
 
 namespace UnitySerializationBridge.Utils;
@@ -31,4 +32,6 @@ internal static class JsonUtils
         if (string.IsNullOrEmpty(json) || json == "null") return null;
         return JsonConvert.DeserializeObject(json, type, Settings);
     }
+
+    public static bool HasAttribute<T>(this IAttributeProvider provider, bool inherit = false) => provider.GetAttributes(inherit).HasOfType(typeof(T));
 }

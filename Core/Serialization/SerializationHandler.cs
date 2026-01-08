@@ -30,22 +30,6 @@ internal class SerializationHandler : MonoBehaviour, ISerializationCallbackRecei
         }
         return field;
     }
-    // Cache Type lookups (Type.GetType is very slow)
-    internal static LRUCache<string, Type> TypeNameCache; // About 500 types is enough for many mods installed
-    static Type GetFastType(string compName)
-    {
-        // Expensive lookup if no cache available
-        if (TypeNameCache == null)
-            return Type.GetType(compName);
-
-        // Fast Type Lookup
-        if (!TypeNameCache.TryGetValue(compName, out Type compType))
-        {
-            compType = Type.GetType(compName);
-            if (compType != null) TypeNameCache.Add(compName, compType);
-        }
-        return compType;
-    }
 
     // --- CONFIGURATION ---
     internal static bool debugEnabled = false;
@@ -67,15 +51,7 @@ internal class SerializationHandler : MonoBehaviour, ISerializationCallbackRecei
     private List<string> _componentNames = [];
     [SerializeField]
     private List<bool> _isFieldByReference = [];
-    // TO BE USED WITH THE SerializationDetector
-    public List<Component> ReferencedComponents = [];
-    private HashSet<Component> _hashedReferencedComponents = []; // Collection to optimize the lookup of ReferencedComponents
 
-    void Awake()
-    {
-        ReferencedComponents.RemoveAll(comp => !comp); // Remove all null components, if there are any
-        _hashedReferencedComponents = [.. ReferencedComponents];
-    }
     // BEFORE SERIALIZATION
     public void OnBeforeSerialize()
     {
@@ -90,8 +66,6 @@ internal class SerializationHandler : MonoBehaviour, ISerializationCallbackRecei
         _fields.Clear();
         _componentNames.Clear();
         _isFieldByReference.Clear();
-        ReferencedComponents.Clear();
-        _hashedReferencedComponents.Clear();
 
         // Clear buffers
         _triggeredReceiversBuffer.Clear();
@@ -106,7 +80,6 @@ internal class SerializationHandler : MonoBehaviour, ISerializationCallbackRecei
             _fields.Capacity = count;
             _componentNames.Capacity = count;
             _isFieldByReference.Capacity = count;
-            ReferencedComponents.Capacity = count;
         }
 
         // Check all registered targets from this GameObject
@@ -155,8 +128,6 @@ internal class SerializationHandler : MonoBehaviour, ISerializationCallbackRecei
                 _isFieldByReference.Add(json.isReference);
                 _fields.Add(baseField.Name);
                 _componentNames.Add(compType.AssemblyQualifiedName);
-                if (_hashedReferencedComponents.Add(rootComponent))
-                    ReferencedComponents.Add(rootComponent);
             }
         }
 
@@ -164,15 +135,9 @@ internal class SerializationHandler : MonoBehaviour, ISerializationCallbackRecei
         _triggeredReceiversBuffer.Clear();
         _quickComponentCacheBuffer.Clear();
     }
-    // Restoration here
     public void OnAfterDeserialize()
     {
-
-        if (debugEnabled)
-        {
-            Debug.Log($"({gameObject.name}) ======================  DESERIALIZATION PROCESS  ======================");
-        }
-
+        // This is just cleanup
         // Reset states
         _receivers.Clear();
         _hasTriggeredDeserialize = false;
@@ -186,30 +151,21 @@ internal class SerializationHandler : MonoBehaviour, ISerializationCallbackRecei
             Debug.Log($"Fields: {_fields.Count}");
             Debug.Log($"isFieldByReference: {_isFieldByReference.Count}");
         }
-
-        //Restore the Data
-        for (int i = 0; i < _serializedData.Count; i++)
-        {
-            if (!_isFieldByReference[i]) // Only trigger non-ref fields
-                ApplyJsonToPath(_componentNames[i], _fields[i], _serializedData[i], false);
-        }
     }
 
 
     // Called to finalize the deserialization step
-    internal void ExecuteLifecycleCallbacks()
+    internal void ExecuteLifecycleCallbacks() // Restoration here!
     {
         if (!_hasTriggeredSafePostDeserialize)
         {
             if (debugEnabled)
             {
-                Debug.Log($"({gameObject.name}) ======================  REFERENCE DESERIALIZATION PROCESS  ======================");
+                Debug.Log($"({gameObject.name}) ======================  DESERIALIZATION PROCESS  ======================");
             }
             for (int i = 0; i < _serializedData.Count; i++)
-            {
-                if (_isFieldByReference[i]) // Only trigger ref fields
-                    ApplyJsonToPath(_componentNames[i], _fields[i], _serializedData[i], true);
-            }
+                ApplyJsonToPath(_componentNames[i], _fields[i], _serializedData[i], _isFieldByReference[i]);
+
             _hasTriggeredSafePostDeserialize = true;
         }
 
@@ -250,7 +206,7 @@ internal class SerializationHandler : MonoBehaviour, ISerializationCallbackRecei
     // Basically get object from JSON
     private void ApplyJsonToPath(string compName, string fieldName, string json, bool isReference)
     {
-        var compType = GetFastType(compName);
+        var compType = ReflectionUtils.GetFastType(compName);
 
         if (!TryGetComponent(compType, out var current)) return;
 

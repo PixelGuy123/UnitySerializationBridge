@@ -14,7 +14,7 @@ internal static class AssemblyUtils
     public static bool IsFromGameAssemblies(this Type type)
     {
         // Obviously the handler shouldn't be accounted at all
-        if (type == typeof(SerializationHandler))
+        if (type == typeof(SerializationHandler) || type == typeof(ComponentMap))
             return true;
 
         var assembly = type.Assembly;
@@ -63,7 +63,7 @@ internal static class AssemblyUtils
         return false;
     }
 
-    public static bool IsUnityInternalType(this Type type)
+    public static bool IsGameAssemblyType(this Type type)
     {
         // If the type is from System itself, then return false
         if (type.IsPrimitive || type == typeof(string) || type.IsEnum) return false;
@@ -86,6 +86,31 @@ internal static class AssemblyUtils
 
         // Check array element types
         if (type.IsArray && type.GetElementType().IsFromGameAssemblies())
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    public static bool IsUnityComponentType(this Type type)
+    {
+        var compType = typeof(UnityEngine.Component);
+        // Check the type itself IF it is the type the one from assemblies; otherwise, go to collection check
+        if (!typeof(IEnumerable).IsAssignableFrom(type) && compType.IsAssignableFrom(type)) return true;
+
+        // Check generic arguments for collections
+        if (type.IsGenericType)
+        {
+            Type[] generics = type.GetGenericArguments();
+            for (int i = 0; i < generics.Length; i++)
+            {
+                if (compType.IsAssignableFrom(generics[i])) return true;
+            }
+        }
+
+        // Check array element types
+        if (type.IsArray && compType.IsAssignableFrom(type.GetElementType()))
         {
             return true;
         }

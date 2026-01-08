@@ -38,42 +38,38 @@ namespace UnitySerializationBridge
 				SceneManager.sceneLoaded += GetEstimatedTypeSize;
 			else
 				CacheInitializer.InitializeCacheValues();
-#if RELEASE
-		}
-#endif
 
-		void GetEstimatedTypeSize(Scene _, LoadSceneMode _2)
-		{
-			// Immediately removes from the scene
-			SceneManager.sceneLoaded -= GetEstimatedTypeSize;
-
-			Assembly myAssembly = typeof(SerializationHandler).Assembly;
-			long typeSize = 0;
-			// Do the Type estimation
-			foreach (var assembly in AccessTools.AllAssemblies())
+			void GetEstimatedTypeSize(Scene _, LoadSceneMode _2)
 			{
-				// If it's an assembly from Managed folder or this project, skip
-				if (assembly.IsGameAssembly() || assembly == myAssembly) continue;
+				// Immediately removes from the scene
+				SceneManager.sceneLoaded -= GetEstimatedTypeSize;
 
-				// Increment the estimated size
-				typeSize += AccessTools.GetTypesFromAssembly(assembly).Length;
+				Assembly myAssembly = typeof(SerializationHandler).Assembly;
+				long typeSize = 0;
+				// Do the Type estimation
+				foreach (var assembly in AccessTools.AllAssemblies())
+				{
+					// If it's an assembly from Managed folder or this project, skip
+					if (assembly.IsGameAssembly() || assembly == myAssembly) continue;
+
+					// Increment the estimated size
+					typeSize += AccessTools.GetTypesFromAssembly(assembly).Length;
+				}
+
+				// Calculate the ideal size of the LRUCache 
+				// I seriously have to specify generic parameters to access a static field. Why.
+				sizeForTypesReflectionCache.Value = (int)System.Math.Floor(MathUtils.CalculateCurve(typeSize, 600, 240));
+
+				// Initialize here otherwise
+				CacheInitializer.InitializeCacheValues();
 			}
 
-			// Calculate the ideal size of the LRUCache 
-			// I seriously have to specify generic parameters to access a static field. Why.
-			sizeForTypesReflectionCache.Value = (int)System.Math.Floor(MathUtils.CalculateCurve(typeSize, 600, 240));
-
-			// Initialize here otherwise
-			CacheInitializer.InitializeCacheValues();
-		}
-
-
-#if DEBUG
-
 			// DEBUG
+#if DEBUG
 			StartCoroutine(WaitForGameplay("MainMenu"));
+#endif
 		}
-
+#if DEBUG
 		System.Collections.IEnumerator WaitForGameplay(string scene)
 		{
 			yield return null;
@@ -81,10 +77,11 @@ namespace UnitySerializationBridge
 
 			// Benchmark
 			Benchmark(1);
-			Benchmark(5);
-			Benchmark(25);
-			Benchmark(50);
-			Benchmark(100);
+			// Benchmark(2);
+			// Benchmark(5);
+			// Benchmark(25);
+			// Benchmark(50);
+			// Benchmark(100);
 
 			static void Benchmark(int instantiations)
 			{
@@ -95,14 +92,13 @@ namespace UnitySerializationBridge
 				stopwatch.Start();
 
 				// START
-				Test.TestComponentToSerialize.shallInstantiate = true;
-				var newObject = new GameObject($"OurTestSubject_{instantiations}").AddComponent<Test.TestComponentToSerialize>();
-				Test.TestComponentToSerialize.shallInstantiate = false;
+				var newObject = new GameObject($"OurTestSubject_{instantiations}").AddComponent<SerializationBridgeTester>();
 				for (int i = 0; i < instantiations; i++)
 				{
 					if (debug)
 						Debug.Log($"==== Instantiating OurTestObject_{instantiations}_{i} =====");
 					newObject = Instantiate(newObject);
+					newObject.VerifyIntegrity();
 					if (debug)
 						newObject.name = $"OurTestObject_{instantiations}_{i}"; // To be easy to actually see the info
 				}

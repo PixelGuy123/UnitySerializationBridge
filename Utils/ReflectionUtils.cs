@@ -15,6 +15,7 @@ internal static class ReflectionUtils
     internal static LRUCache<FieldInfo, Action<object, object>> FieldInfoSetterCache;
     internal static ConditionalWeakTable<Type, Func<object, object>> SelfActivatorConstructorCache;
     internal static ConditionalWeakTable<Type, List<FieldInfo>> TypeToFieldsInfoCache;
+    internal static LRUCache<string, Type> TypeNameCache;
 
     public static Func<object, object> CreateFieldGetter(this FieldInfo fieldInfo)
     {
@@ -94,5 +95,20 @@ internal static class ReflectionUtils
         func = Expression.Lambda<Func<object, object>>(newExpression, parameter).Compile();
         SelfActivatorConstructorCache?.Add(type, func);
         return true;
+    }
+
+    public static Type GetFastType(string compName)
+    {
+        // Expensive lookup if no cache available
+        if (TypeNameCache == null)
+            return Type.GetType(compName);
+
+        // Fast Type Lookup
+        if (!TypeNameCache.TryGetValue(compName, out Type compType))
+        {
+            compType = Type.GetType(compName);
+            if (compType != null) TypeNameCache.Add(compName, compType);
+        }
+        return compType;
     }
 }

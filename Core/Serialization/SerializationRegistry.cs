@@ -45,8 +45,6 @@ internal static class SerializationRegistry
             _cachedRootTypes.Remove(currentScanType);
             _cachedRootTypes.Add(currentScanType, new StrongBox<bool>(worthRegistering));
 
-            currentScanType = currentScanType.BaseType;
-
             if (BridgeManager.enableDebugLogs.Value)
             {
                 if (!worthRegistering)
@@ -119,7 +117,7 @@ internal static class SerializationRegistry
         if (type.IsPrimitive || type == typeof(string) || type.IsEnum) return false;
 
         // Any type from Managed or that inherits UnityEngine.Object
-        if (type.IsUnityInternalType()) return false;
+        if (type.IsGameAssemblyType()) return false;
 
         // Only traverse custom classes
         return type.IsClass || type.IsValueType;

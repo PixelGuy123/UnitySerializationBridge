@@ -1,3 +1,4 @@
+using HarmonyLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 using System;
@@ -15,27 +16,54 @@ internal class UnityContractResolver : DefaultContractResolver
     // Cache to know what properties to look for after the first lookup
     internal static ConditionalWeakTable<Type, IList<JsonProperty>> propsCache;
     private static readonly UniversalUnityReferenceConverter UnityReferenceConverter = new();
+    private static readonly UniversalUnityReferenceConverter PassiveUnityReferenceConverter = new() { PassiveSerialization = true };
     private static readonly UniversalUnityValueConverter UnityValueConverter = new();
 
     protected override JsonProperty CreateProperty(MemberInfo member, MemberSerialization memberSerialization)
     {
         JsonProperty property = base.CreateProperty(member, memberSerialization);
-        bool unityType = property.DeclaringType.IsUnityExclusive(typeof(Component));
+        bool unityExclusive = property.PropertyType.IsUnityExclusive();
 
-        if (unityType)
+
+        // If it has [SerializeReference], try to serialize by reference
+        if (property.AttributeProvider.HasAttribute<SerializeReference>())
         {
-            // Check if the field or property has [SerializeReference]
-            if (property.DeclaringType.IsDefined(typeof(SerializeReference)))
+            if (unityExclusive)
             {
+                if (BridgeManager.enableDebugLogs.Value) Debug.Log($"[{property.PropertyName}] is using UnityReferenceConverter.");
                 property.Converter = UnityReferenceConverter;
-                return property;
             }
-
-            // If it's array, make the item converter use the values instead
-            if (typeof(IEnumerable).IsAssignableFrom(property.DeclaringType))
-                property.ItemConverter = UnityValueConverter;
             else
-                property.Converter = UnityValueConverter;
+            {
+                if (BridgeManager.enableDebugLogs.Value) Debug.Log($"[{property.PropertyName}] is using standard Referencing.");
+                property.IsReference = true;
+                property.ItemIsReference = true;
+            }
+            return property;
+        }
+
+        // If the property is not Unity, skip this
+        if (!unityExclusive)
+            return property;
+
+        // If the property is NOT contained in a Component, and knowing the property is an UnityEngine.Object, use passive referencing
+        if (!typeof(Component).IsAssignableFrom(property.DeclaringType))
+        {
+            if (BridgeManager.enableDebugLogs.Value) Debug.Log($"[{property.PropertyName}] is using (PASSIVE) UnityReferenceConverter.");
+            property.Converter = PassiveUnityReferenceConverter;
+            return property;
+        }
+        // Otherwise, assume that the property is holding a reference to an UnityEngine.Object that needs instantiation
+        // If it's array, make the item converter use the values instead
+        if (typeof(IEnumerable).IsAssignableFrom(property.PropertyType))
+        {
+            property.ItemConverter = UnityValueConverter;
+            if (BridgeManager.enableDebugLogs.Value) Debug.Log($"[{property.PropertyName}] items are using UnityValueConverter.");
+        }
+        else
+        {
+            property.Converter = UnityValueConverter;
+            if (BridgeManager.enableDebugLogs.Value) Debug.Log($"[{property.PropertyName}] is using UnityValueConverter.");
         }
 
 
@@ -58,18 +86,26 @@ internal class UnityContractResolver : DefaultContractResolver
         Type currentType = type;
         while (currentType != null && currentType != typeof(object))
         {
-            var fields = currentType.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+            var fields = AccessTools.GetDeclaredFields(currentType);
 
+            // Make private fields public if possible
             foreach (var field in fields)
             {
+                if (field.IsStatic || field.IsPublic) continue;
+
                 // We only care about private fields marked for Unity serialization
                 bool isSerializeField = field.IsDefined(typeof(SerializeField), false);
                 bool isSerializeReference = field.IsDefined(typeof(SerializeReference), false);
 
                 if (isSerializeField || isSerializeReference)
                 {
-                    // Skip if it's a raw Unity engine type we don't want to touch
-                    if (field.FieldType.IsUnityInternalType()) continue;
+                    // If this is a component and it is attempting to serialize another component, Unity can already do that; the serializer ignores this
+                    if (field.DeclaringType.IsUnityComponentType() && field.FieldType.IsUnityComponentType())
+                    {
+                        if (BridgeManager.enableDebugLogs.Value) Debug.Log($"[{field.Name}] field has been detected as serialized private and REMOVED!");
+                        continue;
+                    }
+                    if (BridgeManager.enableDebugLogs.Value) Debug.Log($"[{field.Name}] field has been detected as serialized private and INCLUDED!");
 
                     // Create property (this calls our overridden CreateProperty above)
                     JsonProperty jsonProp = CreateProperty(field, memberSerialization);
@@ -108,10 +144,14 @@ internal class UnityContractResolver : DefaultContractResolver
         // Filter out any property declared in a Unity assembly
         for (int i = props.Count - 1; i >= 0; i--)
         {
-            if (props[i].DeclaringType.IsUnityInternalType() || props[i].PropertyType.IsUnityInternalType())
+            // If this is a component and it's trying to serialize one, remove it from here
+            if (props[i].DeclaringType.IsUnityComponentType() && !props[i].PropertyType.IsUnityComponentType())
             {
+                if (BridgeManager.enableDebugLogs.Value) Debug.Log($"[{props[i].PropertyName}] has been detected and REMOVED from the properties.");
                 props.RemoveAt(i);
+                continue;
             }
+            if (BridgeManager.enableDebugLogs.Value) Debug.Log($"[{props[i].PropertyName}] has been INCLUDED.");
         }
         propsCache.Add(type, props);
 

@@ -21,6 +21,7 @@ internal static class CacheInitializer
         ReflectionUtils.FieldInfoGetterCache = new(BridgeManager.sizeForMemberAccessReflectionCache.Value);
         ReflectionUtils.FieldInfoSetterCache = new(BridgeManager.sizeForMemberAccessReflectionCache.Value);
         ReflectionUtils.TypeToFieldsInfoCache = new();
+        ReflectionUtils.SelfActivatorConstructorCache = new();
 
         // UnityContractResolver
         UnityContractResolver.propsCache = new();
@@ -29,7 +30,7 @@ internal static class CacheInitializer
     {
         // SerializationHandler
         SerializationHandler.FieldInfoCache = new();
-        SerializationHandler.TypeNameCache = new(BridgeManager.sizeForTypesReflectionCache.Value);
+        ReflectionUtils.TypeNameCache = new(BridgeManager.sizeForTypesReflectionCache.Value);
         SerializationHandler.debugEnabled = BridgeManager.enableDebugLogs.Value;
     }
 }
