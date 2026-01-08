@@ -1,60 +1,34 @@
-using System.Collections;
-using System.Collections.Generic;
-using System.Text;
-using UnityEngine;
+using System;
+using System.Reflection;
+using Newtonsoft.Json;
+using UnitySerializationBridge.Core.JSON;
 
 namespace UnitySerializationBridge.Utils;
 
-public static class JsonUtils
+internal static class JsonUtils
 {
-    public static string ToMultiJson(this IEnumerable collection)
+    // Cache the converter to avoid allocation per contract
+    private static readonly JsonSerializerSettings Settings = new()
     {
-        StringBuilder sb = new();
-        foreach (object item in collection)
-        {
-            // Serialize individual items as jsons
-            sb.Append(JsonUtility.ToJson(item));
-        }
-        return sb.ToString();
+        ContractResolver = new UnityContractResolver(),
+        ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
+        TypeNameHandling = TypeNameHandling.Auto, // VERY IMPORTANT FOR POLYMORPHISM
+        PreserveReferencesHandling = PreserveReferencesHandling.None // Don't work by default, so don't use them
+    };
+    public static (string json, bool isReference) ToJson(object obj, FieldInfo info)
+    {
+        if (obj == null)
+            return ("null", false);
+
+        if (info.IsDefined(typeof(UnityEngine.SerializeReference)))
+            return (string.Empty, true);
+
+        return (JsonConvert.SerializeObject(obj, obj.GetType(), Settings), false);
     }
 
-    public static List<string> UnpackMultiJson(string json)
+    public static object FromJsonOverwrite(Type type, string json)
     {
-        List<string> result = [];
-        if (string.IsNullOrEmpty(json)) return result;
-
-        int braceDepth = 0;
-        int startIndex = 0;
-        bool insideString = false;
-
-        for (int i = 0; i < json.Length; i++)
-        {
-            char c = json[i];
-
-            // Handle strings to avoid counting braces inside them
-            if (c == '"' && (i <= 1 || json[i - 1] != '\\' || json[i - 2] == '\\')) // Accounting to '\\"' edge case
-            {
-                insideString = !insideString;
-            }
-
-            if (!insideString)
-            {
-                if (c == '{')
-                {
-                    if (braceDepth == 0) startIndex = i;
-                    braceDepth++;
-                }
-                else if (c == '}')
-                {
-                    braceDepth--;
-                    if (braceDepth == 0)
-                    {
-                        // Found a complete JSON object
-                        result.Add(json.Substring(startIndex, i - startIndex + 1));
-                    }
-                }
-            }
-        }
-        return result;
+        if (string.IsNullOrEmpty(json) || json == "null") return null;
+        return JsonConvert.DeserializeObject(json, type, Settings);
     }
 }

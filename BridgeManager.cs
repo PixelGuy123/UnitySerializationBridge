@@ -1,23 +1,23 @@
-﻿using System;
-using System.Collections;
-using System.IO;
-using System.Linq;
-using System.Reflection;
-using BepInEx;
+﻿using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
-using UnityEngine;
+using UnitySerializationBridge.Core;
 using UnityEngine.SceneManagement;
-using UnitySerializationBridge.Interfaces;
+using UnitySerializationBridge.Utils;
+using System.Reflection;
+using UnityEngine;
+using UnitySerializationBridge.Core.Serialization;
 
 namespace UnitySerializationBridge
 {
 	[BepInPlugin(GUID, PluginInfo.PLUGIN_NAME, PluginInfo.PLUGIN_VERSION)]
-	public class BridgeManager : BaseUnityPlugin
+	internal class BridgeManager : BaseUnityPlugin
 	{
 		const string GUID = "pixelguy.pixelmodding.unity.bridgemanager";
-		internal ConfigEntry<bool> enableDebugLogs;
-		public static BridgeManager Instance { get; private set; }
+		internal static ConfigEntry<bool> enableDebugLogs, enabledEstimatedTypeSize;
+		internal static ConfigEntry<int> sizeForTypesReflectionCache, sizeForMemberAccessReflectionCache;
+		internal static BridgeManager Instance { get; private set; }
+		// Private/Internal methods
 		void Awake()
 		{
 			// Init
@@ -26,50 +26,91 @@ namespace UnitySerializationBridge
 			h.PatchAll();
 
 			// Config
-			enableDebugLogs = Config.Bind("Debugging", "Enable Debug Logs", true, "If True, the library will log all the registered types on initialization.");
+			enableDebugLogs = Config.Bind("Debugging", "Enable Debug Logs", false, "If True, the library will log all the registered types on initialization.");
+			enabledEstimatedTypeSize = Config.Bind("Performance", "Enable Type-Size Estimation", false, "If True, the library will scan all types from the Plugins folder to estimate the max size of the cache for saving Types. This might make the loading time take longer.");
+			sizeForTypesReflectionCache = Config.Bind("Performance", "Type Caching Limit", 300, "Determines the size of the cache for saving types. Any value below 100 will default to estimating cache size (Type-Size Estimation).");
+			sizeForMemberAccessReflectionCache = Config.Bind("Performance", "Member Access Caching Limit", 450, "Determines the size of the cache for saving most member-access operations (FieldInfo.GetValue, FieldInfo.SetValue, MethodInfo.Invoke, Activator.Invoke, etc.). The value cannot be below 100.");
+			sizeForMemberAccessReflectionCache.Value = Mathf.Max(100, sizeForMemberAccessReflectionCache.Value);
+
+			CacheInitializer.ImmediatelyInitializeCacheValues();
+
+			if (!enabledEstimatedTypeSize.Value || sizeForTypesReflectionCache.Value < 100)
+				SceneManager.sceneLoaded += GetEstimatedTypeSize;
+			else
+				CacheInitializer.InitializeCacheValues();
+#if RELEASE
+		}
+#endif
+
+		void GetEstimatedTypeSize(Scene _, LoadSceneMode _2)
+		{
+			// Immediately removes from the scene
+			SceneManager.sceneLoaded -= GetEstimatedTypeSize;
+
+			Assembly myAssembly = typeof(SerializationHandler).Assembly;
+			long typeSize = 0;
+			// Do the Type estimation
+			foreach (var assembly in AccessTools.AllAssemblies())
+			{
+				// If it's an assembly from Managed folder or this project, skip
+				if (assembly.IsGameAssembly() || assembly == myAssembly) continue;
+
+				// Increment the estimated size
+				typeSize += AccessTools.GetTypesFromAssembly(assembly).Length;
+			}
+
+			// Calculate the ideal size of the LRUCache 
+			// I seriously have to specify generic parameters to access a static field. Why.
+			sizeForTypesReflectionCache.Value = Mathf.FloorToInt(typeSize * 0.75f);
+
+			// Initialize here otherwise
+			CacheInitializer.InitializeCacheValues();
+		}
+
+
+#if DEBUG
 
 			// DEBUG
-			RegisterNamespace(Assembly.GetExecutingAssembly(), "UnitySerializationBridge.Test");
-			StartCoroutine(WaitForGameplay());
+			StartCoroutine(WaitForGameplay("MainMenu"));
 		}
 
-		IEnumerator WaitForGameplay()
+		System.Collections.IEnumerator WaitForGameplay(string scene)
 		{
-			while (SceneManager.GetActiveScene().name != "MainMenu") yield return null;
+			yield return null;
+			while (SceneManager.GetActiveScene().name != scene) yield return null;
 
-			var newObject = new GameObject("OurTestSubject").AddComponent<Test.TestComponentToSerialize>();
-		}
+			// Benchmark
+			Benchmark(1);
+			Benchmark(5);
+			Benchmark(25);
+			Benchmark(50);
+			Benchmark(100);
 
-		/// <summary>
-		/// Call this to scan a namespace for classes that need bridging.
-		/// <param name="assembly">The assembly to be scanned.</param>
-		/// <param name="targetNamespace">The namespace to reduce the search time.</param>
-		/// <remarks>Namespace format is what you use in your code (eg. "MyPlugin.Core.Components").</remarks>
-		/// </summary>
-		public void RegisterNamespace(Assembly assembly, string targetNamespace)
-		{
-			// Get all the types needed from the assembly
-			foreach (var type in AccessTools.GetTypesFromAssembly(assembly).Where(t => t.Namespace == targetNamespace))
+			static void Benchmark(int instantiations)
 			{
-				// If it is a MonoBehaviour
-				if (typeof(MonoBehaviour).IsAssignableFrom(type))
+				var debug = enableDebugLogs.Value;
+				if (debug)
+					Debug.Log($"==== Starting benchmark with {instantiations} instantiations =====");
+				System.Diagnostics.Stopwatch stopwatch = new();
+				stopwatch.Start();
+
+				// START
+				Test.TestComponentToSerialize.shallInstantiate = true;
+				var newObject = new GameObject($"OurTestSubject_{instantiations}").AddComponent<Test.TestComponentToSerialize>();
+				Test.TestComponentToSerialize.shallInstantiate = false;
+				for (int i = 0; i < instantiations; i++)
 				{
-					// Check if this MonoBehaviour has any IAutoSerializable fields
-					if (AccessTools.GetDeclaredFields(type)
-						.Any(f => typeof(IAutoSerializable).IsAssignableFrom(f.FieldType)))
-					{
-						Core.SerializationRegistry.componentTypesToAddBridgeSerializer.Add(type);
-						Core.SerializationRegistry.Register(type);
-					}
+					if (debug)
+						Debug.Log($"==== Instantiating OurTestObject_{instantiations}_{i} =====");
+					newObject = Instantiate(newObject);
+					if (debug)
+						newObject.name = $"OurTestObject_{instantiations}_{i}"; // To be easy to actually see the info
 				}
+				//END
+				stopwatch.Stop();
+				Debug.Log($"==== Instantiated {instantiations} Objects | Elapsed milliseconds: {stopwatch.ElapsedMilliseconds}ms ====");
 			}
 		}
-
-		// Internal methods
-		internal void Log(object message)
-		{
-			if (!enableDebugLogs.Value) return;
-			Debug.Log(message, this);
-		}
+#endif
 	}
 }

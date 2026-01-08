@@ -1,3 +1,5 @@
+
+#if DEBUG
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -5,171 +7,175 @@ using UnitySerializationBridge.Interfaces;
 
 namespace UnitySerializationBridge.Test;
 
-public class TestComponentToSerialize : MonoBehaviour
+internal class TestComponentToSerialize : MonoBehaviour, ISafeSerializationCallbackReceiver
 {
-    [SerializeField]
-    private SerializableComponent component;
-
-    [SerializeField]
-    private GenericSerializableComponent<string> stringComponent;
-
-    static bool shallInstantiate = true;
-
-    void Start()
+    public static bool shallInstantiate = false;
+    void Awake()
     {
         if (!shallInstantiate) return;
 
-        component = new()
-        {
-            value = 2,
-            str = "Hello!",
-            subComp = new()
-            {
-                value = 40,
-                str = "WELCOME TO"
-            },
-            genComp = new()
-            {
-                Value = new()
-                {
-                    value = 1240891,
-                    str = "djiandisoadsa"
-                },
-                anotherValue = 99
-            },
-            secondGenComp = new()
-            {
-                Value = "Testing string",
-                anotherValue = 99,
-                component = new()
-                {
-                    testArray = ["Sewe", "afdassa", "iiiio", "128312908"],
-                    Value = true,
-                    anotherValue = 5322346,
-                    component = [
-                        new()
-                    {
-                        Value = "Something else to be tested",
-                        anotherValue = 999124
-                    },
-                    new()
-                    {
-                        Value = "Something els",
-                        anotherValue = 2254223
-                    },
-                    new()
-                    {
-                        Value = "Sometadasdasdsadsadsad\\",
-                        anotherValue = 241211251
-                    },
-                    new()
-                    {
-                        Value = "Haha you got joked els{\\}",
-                        anotherValue = 1111231
-                    }],
-                    listComponents = [
-                        new()
-                    {
-                        Value = "Something else to be tested",
-                        anotherValue = 999124
-                    },
-                    new()
-                    {
-                        Value = "Something els",
-                        anotherValue = 2254223
-                    },
-                    new()
-                    {
-                        Value = "Sometadasdasdsadsadsad\\",
-                        anotherValue = 241211251
-                    },
-                    new()
-                    {
-                        Value = "Haha you got joked els{\\}",
-                        anotherValue = 1111231
-                    }],
-                    hashComponents = [
-                        new()
-                    {
-                        Value = "Something else to be tested",
-                        anotherValue = 999124
-                    },
-                    new()
-                    {
-                        Value = "Something els",
-                        anotherValue = 2254223
-                    },
-                    new()
-                    {
-                        Value = "Sometadasdasdsadsadsad\\",
-                        anotherValue = 241211251
-                    },
-                    new()
-                    {
-                        Value = "Haha you got joked els{\\}",
-                        anotherValue = 1111231
-                    }],
-                    dictoComponents = new()
-                    {
-                        {"Keying", new() { Value = "Silly joke!", anotherValue = -99 }}
-                    }
-                }
-            }
+        instanceOfC = new(){
+              myValue = "THISISACOOLC",
+              myComponents = [this],
+              myCompRef = this,
+              referenceOfB = new B(){
+              anotherValue = 99,
+              value = "MyOwnValue",
+              something = -99
+          }
         };
 
-        stringComponent = new()
-        {
-            Value = "Hello guys, welcome to my video",
-            anotherValue = 8194
-        };
+        instancesOfC = [instanceOfC];
+        arrayOfC = [instanceOfC];
 
-        // Instantiates back to see if it copies
-        shallInstantiate = false;
-        Instantiate(this);
+        List<C> cs = [
+          new(){
+              myValue = "984194",
+              myDValue = new(){
+                  booleanValue = true
+              }
+          },
+          new(){
+              myValue = "dasdsaad",
+              myDValue = new(){
+                  booleanValue = true
+              }
+          }
+        ];
+
+        List<D> structs = [
+            new() { booleanValue = true }
+        ];
+
+        instancesOfA = [
+          new B(){
+              anotherValue = 99,
+              value = "MyOwnValue",
+              something = -99,
+              myListOfCs = cs,
+              myArrayOfCs = cs.ToArray(),
+              myStruct = new() { booleanValue = true },
+              myStructArray = structs.ToArray(),
+              myStructList = structs
+          },
+          new A(){
+              value = "MyOwnValue",
+              something = -99,
+              myListOfCs = cs,
+              myArrayOfCs = cs.ToArray(),
+              myStruct = new() { booleanValue = true },
+              myStructArray = structs.ToArray(),
+              myStructList = structs
+          }
+        ];
+    }
+    public A[] instancesOfA; // Serializable
+    [SerializeReference]
+    public List<C> instancesOfC;
+    [SerializeReference]
+    public C[] arrayOfC;
+    [SerializeReference]
+    public C instanceOfC = null;
+    public void OnBeforeSerialize() { }
+    public void OnAfterDeserialize()
+    {
+        // Debug.Assert(instancesOfA != null);
+        // if (instancesOfA == null) return;
+        // for (int i = 0; i < instancesOfA.Length; i++)
+        // {
+        //     Debug.Log($"=====[{instancesOfA[i].GetType().Name}]=====");
+        //     Debug.Log(instancesOfA[i].ToString());
+        //     Debug.Log("======== END OF OBJECT ========");
+        // }
+    }
+    public void OnAwake() { }
+}
+
+// Classes to simulate an mtm101balddevapi usual animator structure
+[Serializable]
+public class A
+{
+    [SerializeField]
+    internal int something; // Private, but has attribute -> Should Serialize
+    public string value;
+    public List<C> myListOfCs;
+    public C[] myArrayOfCs;
+    public D myStruct;
+    public D[] myStructArray;
+    public List<D> myStructList;
+    public override string ToString()
+    {
+        string data = "\n";
+        data += "Something: " + something + '\n';
+        data += "Value: " + value + '\n';
+        data += "myListOfCs is null? " + (myListOfCs == null) + '\n';
+        if (myListOfCs != null)
+            foreach (var c in myListOfCs) data += $"{c?.ToString()}\n";
+        data += "myArrayOfCs is null? " + (myArrayOfCs == null) + '\n';
+        if (myArrayOfCs != null)
+            foreach (var c in myArrayOfCs) data += $"{c?.ToString()}\n";
+        data += "myStruct: " + myStruct.ToString() + '\n';
+        data += "myStructArray is null? " + (myStructArray == null) + '\n';
+        if (myStructArray != null)
+            foreach (var c in myStructArray) data += $"{c.ToString()}\n";
+        data += "myStructList is null? " + (myStructList == null);
+        if (myStructList != null)
+            foreach (var c in myStructList) data += $"{c.ToString()}\n";
+        return data;
     }
 }
 
 [Serializable]
-class GenericSerializableComponent<T> : IAutoSerializable
+public class B : A
 {
-    public T Value;
-    public int anotherValue = -5;
-    public SecondGenericSerializableComponent<bool> component;
+    [SerializeField]
+    internal int anotherValue; // Private, in Derived class -> Should Serialize
+    public override string ToString()
+    {
+        string data = "\n";
+        data += "anotherValue: " + anotherValue + '\n';
+        data += "Value: " + value + '\n';
+        data += "myListOfCs is null? " + (myListOfCs == null) + '\n';
+        data += "myArrayOfCs is null? " + (myArrayOfCs == null) + '\n';
+        data += "myStruct: " + myStruct.ToString() + '\n';
+        data += "myStructArray is null? " + (myStructArray == null) + '\n';
+        data += "myStructList is null? " + (myStructList == null);
+        return data;
+    }
 }
 
 [Serializable]
-class SecondGenericSerializableComponent<T> : IAutoSerializable
+public class C
 {
-    public T Value;
-    public int anotherValue = -5;
-    public string[] testArray;
-    public ThirdGenericSerializableComponent<string>[] component;
-    public List<ThirdGenericSerializableComponent<string>> listComponents;
-    public HashSet<ThirdGenericSerializableComponent<string>> hashComponents;
-    public Dictionary<string, ThirdGenericSerializableComponent<string>> dictoComponents;
+    public D myDValue;
+    public string myValue;
+    [SerializeReference]
+    public B referenceOfB = null;
+    [SerializeField]
+    [SerializeReference]
+    internal TestComponentToSerialize myCompRef;
+    [SerializeField]
+    [SerializeReference]
+    internal TestComponentToSerialize[] myComponents;
+    public override string ToString()
+    {
+        string data = "\n";
+        data += "myValue: " + myValue + '\n';
+        data += "myDValue: " + myDValue.ToString() + '\n';
+        return data;
+    }
 }
 
 [Serializable]
-class ThirdGenericSerializableComponent<T> : IAutoSerializable
+public struct D
 {
-    public T Value;
-    public int anotherValue = -5;
+    public bool booleanValue;
+    public override string ToString()
+    {
+        string data = "\n";
+        data += "booleanValue: " + booleanValue + '\n';
+        return data;
+    }
 }
 
-
-[Serializable]
-class SerializableComponent : IAutoSerializable
-{
-    public int value = -1;
-    public string str = "This is a default string";
-    public SubSerializableComponent subComp = null;
-    public GenericSerializableComponent<SubSerializableComponent> genComp = null;
-    public GenericSerializableComponent<string> secondGenComp = null;
-}
-
-[Serializable]
-class SubSerializableComponent : IAutoSerializable
-{
-    public int value = -99;
-    public string str = "HAAAA string";
-}
+#endif
