@@ -28,7 +28,7 @@ namespace UnitySerializationBridge
 			// Config
 			enableDebugLogs = Config.Bind("Debugging", "Enable Debug Logs", false, "If True, the library will log all the registered types on initialization.");
 			enabledEstimatedTypeSize = Config.Bind("Performance", "Enable Type-Size Estimation", false, "If True, the library will scan all types from the Plugins folder to estimate the max size of the cache for saving Types. This might make the loading time take longer.");
-			sizeForTypesReflectionCache = Config.Bind("Performance", "Type Caching Limit", 300, "Determines the size of the cache for saving types. Any value below 100 will default to estimating cache size (Type-Size Estimation).");
+			sizeForTypesReflectionCache = Config.Bind("Performance", "Type Caching Limit", 600, "Determines the size of the cache for saving types. Any value below 100 will default to estimating cache size (Type-Size Estimation).");
 			sizeForMemberAccessReflectionCache = Config.Bind("Performance", "Member Access Caching Limit", 450, "Determines the size of the cache for saving most member-access operations (FieldInfo.GetValue, FieldInfo.SetValue, MethodInfo.Invoke, Activator.Invoke, etc.). The value cannot be below 100.");
 			sizeForMemberAccessReflectionCache.Value = Mathf.Max(100, sizeForMemberAccessReflectionCache.Value);
 
@@ -61,7 +61,7 @@ namespace UnitySerializationBridge
 
 			// Calculate the ideal size of the LRUCache 
 			// I seriously have to specify generic parameters to access a static field. Why.
-			sizeForTypesReflectionCache.Value = Mathf.FloorToInt(typeSize * 0.75f);
+			sizeForTypesReflectionCache.Value = (int)System.Math.Floor(MathUtils.CalculateCurve(typeSize, 600, 240));
 
 			// Initialize here otherwise
 			CacheInitializer.InitializeCacheValues();

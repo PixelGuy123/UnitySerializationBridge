@@ -13,11 +13,12 @@ internal static class ReflectionUtils
     // Caching system
     internal static LRUCache<FieldInfo, Func<object, object>> FieldInfoGetterCache;
     internal static LRUCache<FieldInfo, Action<object, object>> FieldInfoSetterCache;
+    internal static ConditionalWeakTable<Type, Func<object, object>> SelfActivatorConstructorCache;
     internal static ConditionalWeakTable<Type, List<FieldInfo>> TypeToFieldsInfoCache;
 
     public static Func<object, object> CreateFieldGetter(this FieldInfo fieldInfo)
     {
-        if (FieldInfoGetterCache.TryGetValue(fieldInfo, out var getter)) return getter;
+        if (FieldInfoGetterCache != null && FieldInfoGetterCache.TryGetValue(fieldInfo, out var getter)) return getter;
 
         var instanceParam = Expression.Parameter(typeof(object), "instance");
 
@@ -33,13 +34,13 @@ internal static class ReflectionUtils
             (Expression)fieldExp;
 
         var lambda = Expression.Lambda<Func<object, object>>(resultExp, instanceParam).Compile();
-        FieldInfoGetterCache.Add(fieldInfo, lambda);
+        FieldInfoGetterCache?.Add(fieldInfo, lambda);
         return lambda;
     }
 
     public static Action<object, object> CreateFieldSetter(this FieldInfo fieldInfo)
     {
-        if (FieldInfoSetterCache.TryGetValue(fieldInfo, out var setter)) return setter;
+        if (FieldInfoSetterCache != null && FieldInfoSetterCache.TryGetValue(fieldInfo, out var setter)) return setter;
 
         var instanceParam = Expression.Parameter(typeof(object), "instance");
         var valueParam = Expression.Parameter(typeof(object), "value");
@@ -55,7 +56,7 @@ internal static class ReflectionUtils
         );
 
         var lambda = Expression.Lambda<Action<object, object>>(assignExp, instanceParam, valueParam).Compile();
-        FieldInfoSetterCache.Add(fieldInfo, lambda);
+        FieldInfoSetterCache?.Add(fieldInfo, lambda);
         return lambda;
     }
 
@@ -69,5 +70,29 @@ internal static class ReflectionUtils
         fieldsInfo = AccessTools.GetDeclaredFields(type);
         TypeToFieldsInfoCache.Add(type, fieldsInfo);
         return fieldsInfo;
+    }
+
+    // There are some Unity components that have their own constructor for duplication (new Material(Material))
+    public static bool TryGetSelfActivator(this Type type, out Func<object, object> func)
+    {
+        if (SelfActivatorConstructorCache != null && SelfActivatorConstructorCache.TryGetValue(type, out func)) return true;
+
+        var selfConstructor = type.GetConstructor([type]); // Get a constructor that is itself
+        if (selfConstructor == null)
+        {
+            func = null;
+            return false;
+        }
+
+        // Get the parameter as object
+        var parameter = Expression.Parameter(typeof(object), "self"); // (object self) => { }
+        // Cast the parameter as desired type
+        var typedParameter = Expression.Convert(parameter, type); // (object self) => { (Material)self }
+        // Put this parameter to be used inside the constructor
+        var newExpression = Expression.New(selfConstructor, typedParameter); // (object self) => new Material((Material)self);
+        // Compile expression
+        func = Expression.Lambda<Func<object, object>>(newExpression, parameter).Compile();
+        SelfActivatorConstructorCache?.Add(type, func);
+        return true;
     }
 }

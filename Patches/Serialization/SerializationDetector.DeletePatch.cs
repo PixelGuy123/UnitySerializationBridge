@@ -11,40 +11,35 @@ static class SerializationDetector_DestroyCheck // Important to clean up cache
     [HarmonyPatch(nameof(Object.Destroy), [typeof(Object)])]
     static void RemoveCache(Object __0) // To make sure the component is properly serialized when added
     {
-        // Get the gameObject
-        GameObject go = __0 as GameObject;
-        Component parentComponent = null;
-        if (!go && __0 is Component parentComp)
+        // If the type is a GameObject, then we don't check for component below
+        if (__0 is GameObject go)
         {
-            go = parentComp.gameObject;
-            parentComponent = parentComp;
-        }
-        if (!go) return;
+            // Remove the entire tree from below (literally cutting down the branch)
+            while (SerializationDetector.ContainerMap.TryGetValue(go, out var childPair))
+            {
+                // Removes the parent from container
+                SerializationDetector.ContainerMap.Remove(go);
 
-        // Removes the gameObject since it won't exist anymore
-        while (SerializationDetector.ContainerMap.TryGetValue(go, out var childPair))
-        {
-            // Removes the parent from container
-            SerializationDetector.ContainerMap.Remove(go);
+                // Set the reference to the child and see if the root goes deeper on the next iteration
+                var child = childPair.Item1;
+                if (child)
+                    go = child;
+            }
 
-            // Set the reference to the child and see if the root goes deeper on the next iteration
-            var child = childPair.Item1;
-            if (child)
-                go = child;
-        }
+            // Remove all the components too (very expensive)
+            var components = go.GetComponentsInChildren<Component>();
+            for (int i = 0; i < components.Length; i++)
+                ComponentMapper.RemoveComponentFromMap(components[i]);
 
-        // Just remove this single component
-        if (parentComponent)
-        {
-            ComponentMapper.RemoveComponentFromMap(parentComponent);
             ComponentMapper.Prune();
             return;
         }
 
-        // If it's the whole GameObject, remove the entire component (very expensive)
-        var components = go.GetComponentsInChildren<Component>();
-        for (int i = 0; i < components.Length; i++)
-            ComponentMapper.RemoveComponentFromMap(components[i]);
-        ComponentMapper.Prune();
+        // Just remove this single component
+        if (__0 is Component component)
+        {
+            ComponentMapper.RemoveComponentFromMap(component);
+            ComponentMapper.Prune();
+        }
     }
 }

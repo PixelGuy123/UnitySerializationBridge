@@ -1,6 +1,7 @@
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
+using UnitySerializationBridge.Utils;
 using Object = UnityEngine.Object;
 
 namespace UnitySerializationBridge.Core.JSON;
@@ -42,7 +43,14 @@ internal class UniversalUnityValueConverter : JsonConverter
         var prefabObject = Object.FindObjectFromInstanceID(id);
         if (!prefabObject) return null;
 
-        // Basically get the opportunity to instantiate the object
+        // Get the self constructor if there's one (eg.: new Material(Material))
+        if (prefabObject.GetType().TryGetSelfActivator(out var constructor))
+        {
+            // Call this constructor instead of instantiating
+            return constructor(prefabObject);
+        }
+
+        // Instantiate instead
         return Object.Instantiate(prefabObject);
     }
 }
