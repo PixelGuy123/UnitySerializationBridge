@@ -5,6 +5,8 @@ using System.Runtime.CompilerServices;
 using System;
 using UnityEngine;
 using System.Collections.Generic;
+using System.Collections;
+using UnitySerializationBridge.Core;
 
 namespace UnitySerializationBridge.Utils;
 
@@ -12,11 +14,12 @@ internal static class AssemblyUtils
 {
     internal static ConditionalWeakTable<Assembly, StrongBox<bool>> TypeIsManagedCache;
     internal static ConditionalWeakTable<Assembly, StrongBox<bool>> TypeIsUnityManagedCache;
+    internal static LRUCache<(Type, int), List<Type>> CollectionNestedElementTypesCache;
 
     public static bool IsFromGameAssemblies(this Type type)
     {
         // Obviously the handler shouldn't be accounted at all
-        if (type == typeof(SerializationHandler) || type == typeof(ComponentMap))
+        if (type == typeof(SerializationHandler))
             return true;
 
         var assembly = type.Assembly;
@@ -53,56 +56,91 @@ internal static class AssemblyUtils
         return isManaged;
     }
 
-    public static bool IsUnityExclusive(this Type type)
+    public static bool CanUnitySerialize(this Type type)
     {
-        Type objType = typeof(UnityEngine.Object);
-        // Check the type
-        return objType.IsAssignableFrom(type.GetTypeFromArray());
-    }
+        // First, what it CAN serialize by default
+        if (type.IsPrimitive || type == typeof(string) || type.IsEnum) return true;
+        if (typeof(UnityEngine.Object).IsAssignableFrom(type)) return true;
 
-    public static bool IsGameAssemblyType(this Type type)
-    {
-        // If the type is from System itself, then return false
-        if (type.IsPrimitive || type == typeof(string) || type.IsEnum) return false;
+        // What Unity CAN'T serialize first before checking the other types
+        if (!type.IsStandardCollection()) return false;
 
-        // If these aren't classes, they are nothing
-        if (!type.IsClass && !type.IsValueType) return false;
+        // Exactly what the plugin aims to fix: classes and value types that aren't from the assembly not being serialized
+        if ((type.IsClass || type.IsValueType) && !type.IsFromGameAssemblies()) return false;
 
-        // Check the type itself IF it is the type the one from assemblies; otherwise, go to collection check
-        if (!type.IsStandardCollection() && type.IsFromGameAssemblies()) return true;
-
-        // Check generic arguments for collections
-        return type.GetTypeFromArray().IsFromGameAssemblies();
+        // Assumes it's a standard collection that Unity could serialize
+        var elementTypes = type.GetTypesFromArray();
+        return elementTypes.Exists(typeof(UnityEngine.Object).IsAssignableFrom);
     }
 
     public static bool IsUnityComponentType(this Type type)
     {
-        var elementType = type.GetTypeFromArray(); // Update the type used
-        // Check the type itself IF it is the type the one from assemblies; otherwise, go to collection check
-        return !type.IsStandardCollection() && (typeof(GameObject) == elementType || typeof(Component).IsAssignableFrom(elementType));
+        var elementTypes = type.GetTypesFromArray();
+        return elementTypes.Contains(typeof(GameObject)) || elementTypes.Exists(typeof(Component).IsAssignableFrom);
     }
 
     // Expect the most basic collection types to be checked, not IEnumerable in general
-    public static bool IsStandardCollection(this Type t) => typeof(Array).IsAssignableFrom(t) || typeof(List<>).IsAssignableFrom(t);
+    public static bool IsStandardCollection(this Type t, bool includeDictionaries = false) =>
+    t.IsArray ||
+    typeof(IList).IsAssignableFrom(t) ||
+    (includeDictionaries && typeof(IDictionary).IsAssignableFrom(t));
 
-    public static Type GetTypeFromArray(this Type collectionType, int layersToCheck = -1) =>
-        collectionType.GetTypeFromArray(layersToCheck, 0);
-    private static Type GetTypeFromArray(this Type collectionType, int layersToCheck, int currentLayer)
+    public static List<Type> GetTypesFromArray(this Type collectionType, int layersToCheck = -1)
     {
-        if ((layersToCheck > 0 && currentLayer >= layersToCheck) || !collectionType.IsStandardCollection())
-            return collectionType;
+        // Normalize the minimum layer boundaries
+        if (layersToCheck <= 0)
+            layersToCheck = -1;
 
+        var typeDepthTuple = (collectionType, layersToCheck);
+        if (CollectionNestedElementTypesCache.TryGetValue(typeDepthTuple, out var results)) return results;
 
-        Type elementType;
-        // Must be a list
+        // Initial capacity guess to reduce resizing
+        results = [];
+        GetTypesFromArrayInternal(collectionType, layersToCheck, 0, results);
+
+        // Cache
+        CollectionNestedElementTypesCache.Add(typeDepthTuple, results);
+        return results;
+    }
+
+    private static void GetTypesFromArrayInternal(this Type collectionType, int layersToCheck, int currentLayer, List<Type> results)
+    {
+        // Depth Guard
+        if (layersToCheck > 0 && currentLayer >= layersToCheck)
+        {
+            results.Add(collectionType);
+            return;
+        }
+
+        // Is it a collection?
+        if (!collectionType.IsStandardCollection(includeDictionaries: true))
+        {
+            results.Add(collectionType);
+            return;
+        }
+
+        // Handle Generics (List<T>, Dictionary<TKey, TValue>)
         if (collectionType.IsGenericType)
         {
-            elementType = collectionType.GetGenericArguments()[0];
-            return elementType.GetTypeFromArray(layersToCheck, currentLayer + 1); // Recursive call
+            Type[] genericArguments = collectionType.GetGenericArguments();
+            for (int i = 0; i < genericArguments.Length; i++)
+            {
+                GetTypesFromArrayInternal(genericArguments[i], layersToCheck, currentLayer + 1, results);
+            }
+            return;
         }
-        if (!collectionType.IsArray) return collectionType; // Default to its own type
 
-        elementType = collectionType.GetElementType();
-        return elementType.GetTypeFromArray(layersToCheck, currentLayer + 1);
+        // Handle Arrays
+        if (collectionType.IsArray)
+        {
+            Type elementType = collectionType.GetElementType();
+            if (elementType != null)
+            {
+                GetTypesFromArrayInternal(elementType, layersToCheck, currentLayer + 1, results);
+            }
+            return;
+        }
+
+        results.Add(collectionType);
     }
 }

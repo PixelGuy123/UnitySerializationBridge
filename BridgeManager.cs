@@ -7,6 +7,7 @@ using UnitySerializationBridge.Utils;
 using System.Reflection;
 using UnityEngine;
 using UnitySerializationBridge.Core.Serialization;
+using UnitySerializationBridge.Patches.Serialization;
 
 namespace UnitySerializationBridge
 {
@@ -24,6 +25,7 @@ namespace UnitySerializationBridge
 			Instance = this;
 			var h = new Harmony(GUID);
 			h.PatchAll();
+			SerializationObserver.harmony = h;
 
 			// Config
 			enableDebugLogs = Config.Bind("Debugging", "Enable Debug Logs", false, "If True, the library will log all the registered types on initialization.");

@@ -11,15 +11,26 @@ namespace UnitySerializationBridge.Core.JSON;
 
 internal class UniversalUnityReferenceValueConverter : JsonConverter
 {
-    const string objectHashRef = "$hash";
+    private const string HashKey = "$hash";
+    private const string TypeKey = "$type";
+    private const string DictionaryKeys = "$keys";
+    private const string DictionaryValues = "$values";
+    private const string DefaultMarker = "$default";
 
-    // Don't try to wrap primitives, strings, or enums in reference containers
+    internal Dictionary<Object, Object> parentToChildPairs;
+    public void UpdateComponentRegister(Dictionary<Object, Object> parentToChildPairs) =>
+        this.parentToChildPairs = parentToChildPairs.Count == 0 ? null : parentToChildPairs;
+
     public override bool CanConvert(Type objectType)
     {
-        if (typeof(Object).IsAssignableFrom(objectType)) return true;
-        if (objectType.IsStandardCollection() && objectType != typeof(string)) return true;
-        return false;
+        // Don't convert primitives or strings
+        if (objectType == typeof(string) || objectType.IsPrimitive) return false;
+
+        // Convert Unity Objects, Collections, or Dictionaries
+        return typeof(Object).IsAssignableFrom(objectType) ||
+               objectType.IsStandardCollection(includeDictionaries: true);
     }
+
     public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
     {
         if (value == null)
@@ -28,126 +39,149 @@ internal class UniversalUnityReferenceValueConverter : JsonConverter
             return;
         }
 
-        // Handle Single Unity Object
+        // Handle Unity Objects (References)
         if (value is Object unityObj)
         {
-            new JObject()
-            {
-                { objectHashRef, unityObj.GetInstanceID() }
-            }.WriteTo(writer);
+            if (!unityObj) { writer.WriteNull(); return; }
+            writer.WriteStartObject();
+            writer.WritePropertyName(HashKey);
+            writer.WriteValue(unityObj.GetInstanceID());
+            writer.WriteEndObject();
+            return;
         }
-        // Handle Collections (Arrays, Lists, Nested Lists)
-        else if (value.GetType().IsStandardCollection())
+
+        var type = value.GetType();
+
+        // Handle Dictionaries (Custom format for complex keys)
+        if (value is IDictionary dict)
         {
             writer.WriteStartArray();
-            foreach (var item in (IEnumerable)value)
+            foreach (DictionaryEntry entry in dict)
             {
-                // Collections can be null
-                if (item == null)
-                {
-                    writer.WriteNull();
-                    continue;
-                }
-
-                if (item is Object itemUnityObj)
-                {
-                    writer.WriteValue(itemUnityObj ? itemUnityObj.GetInstanceID() : 0);
-                }
-                else if (item.GetType().IsStandardCollection())
-                {
-                    // If it's a nested collection
-                    // Recursion
-                    WriteJson(writer, item, serializer);
-                }
-                // Ignore completely this item
+                writer.WriteStartObject();
+                writer.WritePropertyName(DictionaryKeys);
+                WriteJson(writer, entry.Key, serializer);
+                writer.WritePropertyName(DictionaryValues);
+                WriteJson(writer, entry.Value, serializer);
+                writer.WriteEndObject();
             }
             writer.WriteEndArray();
+            return;
         }
+
+        // Handle Standard Collections
+        if (type.IsStandardCollection() && value is IEnumerable enumerable)
+        {
+            writer.WriteStartArray();
+            foreach (var item in enumerable)
+                WriteJson(writer, item, serializer);
+            writer.WriteEndArray();
+            return;
+        }
+
+        // Handle Abstract / Regular Objects
+        // Use a marker to avoid infinite recursion when calling Serialize on itself
+        writer.WriteStartObject();
+        writer.WritePropertyName(TypeKey);
+        writer.WriteValue(type.AssemblyQualifiedName);
+        writer.WritePropertyName(DefaultMarker);
+        if (!type.IsFromGameAssemblies() && (type.IsClass || type.IsValueType))
+        {
+            // Use this, so that the contract resolver is called again to resolve the properties
+            serializer.Serialize(writer, value);
+        }
+        else
+            serializer.SerializeDefault(writer, value);
+        writer.WriteEndObject();
     }
 
     public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
     {
         if (reader.TokenType == JsonToken.Null) return null;
 
-        // Load the token
         JToken token = JToken.Load(reader);
-
-        return ReadRecursively(token, objectType);
+        return ProcessToken(token, objectType, serializer, existingValue);
     }
 
-    private object ReadRecursively(JToken token, Type targetType)
+    private object ProcessToken(JToken token, Type targetType, JsonSerializer serializer, object existingValue = null)
     {
-        // If it's an array
-        if (token.Type == JTokenType.Array)
-        {
-            var getCollection = DeserializeCollection((JArray)token, targetType);
-            return getCollection;
-        }
+        if (token == null || token.Type == JTokenType.Null) return null;
 
-        // Either a raw integer ID from a compact array or a JObject with hash_ref
-        int instanceId = 0;
-        bool foundId = false;
-
-        if (token.Type == JTokenType.Integer)
+        // Handle Unity References ($hash)
+        if (token is JObject joHash && joHash.TryGetValue(HashKey, out var hashToken))
         {
-            instanceId = token.ToObject<int>();
-            foundId = true;
-        }
-        else if (token.Type == JTokenType.Object && token is JObject jo)
-        {
-            if (jo.ContainsKey(objectHashRef))
-            {
-                instanceId = jo[objectHashRef].ToObject<int>();
-                foundId = true;
-            }
-        }
-
-        if (foundId)
-        {
-            // Get Object ID
+            int instanceId = hashToken.Value<int>();
             var unityObject = Object.FindObjectFromInstanceID(instanceId);
+
             if (!unityObject) return null;
             var unityType = unityObject.GetType();
-            // If a Component is detected, then this must be referenced directly, not instantiated
+            // Component Mapping 
             if (unityType.IsUnityComponentType())
             {
+                if (parentToChildPairs.TryGetValue(unityObject, out var child)) return child;
                 return unityObject;
             }
 
-            // Try to get a constructor of same type to clone
+            // ScriptableObjects / Assets (Cloning)
             if (unityType.TryGetSelfActivator(out var constructor))
                 return constructor(unityObject);
-            // Instantiate the object
             return Object.Instantiate(unityObject);
         }
 
-        return null;
-    }
-
-    private object DeserializeCollection(JArray jArray, Type collectionType)
-    {
-        // Determine the type of element inside this collection
-        Type elementType = collectionType.GetTypeFromArray(1); // Check just one layer (List<List<Object>> -> List<Object>)
-
-        // Create a generic List<ElementType> to hold values temporarily
-        IList results = (IList)typeof(List<>).GetGenericConstructor(elementType)();
-
-        // 3. Iterate over the JSON array
-        foreach (JToken childToken in jArray)
+        // Handle Dictionaries ($keys / $values)
+        if (token is JArray jArray && typeof(IDictionary).IsAssignableFrom(targetType))
         {
-            // RECURSION: Call ReadRecursively for every child. 
-            object parsedItem = ReadRecursively(childToken, elementType);
-            results.Add(parsedItem);
+            var args = targetType.GetGenericArguments();
+            var keyType = args[0];
+            var valType = args[1];
+            var dict = (IDictionary)targetType.GetParameterlessConstructor()();
+
+            foreach (var item in jArray)
+            {
+                var k = ProcessToken(item[DictionaryKeys], keyType, serializer);
+                var v = ProcessToken(item[DictionaryValues], valType, serializer);
+                if (k != null) dict.Add(k, v);
+            }
+            return dict;
         }
 
-        // Convert back to target type (Array or List)
-        if (collectionType.IsArray)
+        // Handle Lists/Arrays
+        if (token is JArray listArray)
         {
-            Array finalArray = Array.CreateInstance(elementType, results.Count);
-            for (int i = 0; i < results.Count; i++) finalArray.SetValue(results[i], i);
-            return finalArray;
+            var elementType = targetType.IsArray ? targetType.GetElementType() : targetType.GetGenericArguments()[0];
+            var results = (IList)typeof(List<>).GetGenericConstructor(elementType)();
+            foreach (var child in listArray)
+                results.Add(ProcessToken(child, elementType, serializer));
+
+            if (targetType.IsArray)
+            {
+                var arr = elementType.GetArrayConstructor()(results.Count);
+                for (int i = 0; i < arr.Length; i++) arr.SetValue(results[i], i);
+                return arr;
+            }
+            return results;
         }
 
-        return results;
+        // Handle Objects and Abstract Types
+        if (token is JObject jo)
+        {
+            // Determine concrete type if polymorphic
+            Type actualType = targetType;
+            if (jo.TryGetValue(TypeKey, out var typeToken))
+            {
+                actualType = ReflectionUtils.GetFastType(typeToken.Value<string>()) ?? targetType;
+            }
+
+            // Extract content from marker if present
+            if (jo.TryGetValue(DefaultMarker, out var internalContent))
+            {
+                return internalContent.ToObject(actualType, serializer);
+            }
+
+            // Standard fallback
+            return jo.ToObject(actualType, serializer);
+        }
+
+        return token.ToObject(targetType);
     }
 }

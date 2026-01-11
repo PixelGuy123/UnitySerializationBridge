@@ -13,7 +13,21 @@ public enum ComplexityEnum { Simple = 0, Complex = 100, Invalid = 999 }
 [Serializable]
 public enum StatusFlags { None = 0, Active = 1 << 0, Paused = 1 << 1, Invisible = 1 << 2 }
 
+// Edge Case: Generic Classes and Structs
+[Serializable]
+public class GenericClass<T>
+{
+    public T Value;
+}
+
+[Serializable]
+public struct GenericStruct<T>
+{
+    public T Value;
+}
+
 // Edge Case: Polymorphism (SerializeReference)
+
 [Serializable]
 public abstract class AbstractItem
 {
@@ -31,6 +45,7 @@ public class PotionItem : AbstractItem
 {
     public float healAmount;
     public Color potionColor;
+    public SimpleStruct simpleStruct;
 }
 
 // Edge Case: Nested Structs vs Classes
@@ -60,12 +75,36 @@ public class BridgePayload
     public float floatInfinity;         // Test: float.PositiveInfinity
     public float floatNaN;              // Test: float.NaN
     public int intMin;                  // Test: int.MinValue
+    public SimpleStruct simpleStruct;
+
+
+    [Header("Generic Classes")]
+    public GenericClass<string> genericString;
+    public GenericClass<int> genericInt;
+    public GenericClass<SimpleStruct> genericStruct;
+    public GenericStruct<string> valueGenericString;
+    public GenericStruct<int> valueGenericInt;
+    public GenericStruct<SimpleStruct> valueGenericStruct;
 
     [Header("Unserialize Support")]
     [NonSerialized]
     public string thisTextMustNotBeSerialized;
     [NonSerialized]
     public int thisNumberMustNotBeSerialized;
+
+    [Header("Nullable Types")]
+    public int? nullableNumber;
+    public SimpleStruct? nullableStruct;
+    [SerializeReference] public GenericClass<int> refNullableGenClass; // Should technically work like nullableStruct
+    public GenericClass<int> NullableGenClass; // Should technically work like nullableStruct
+
+    [Header("Dictionaries")]
+    public Dictionary<string, int> stringNumPairs;
+    public Dictionary<UnityEngine.Object, int> objectNumPairs;
+    public Dictionary<UnityEngine.Object, UnityEngine.Vector3> objectUnityPairs;
+    public Dictionary<List<string>, List<int>> nestedStringNumPairs;
+    public Dictionary<List<GenericStruct<SimpleStruct>>, List<SimpleStruct>> nestedStructsPairs;
+
 
     [Header("Enums")]
     public ComplexityEnum standardEnum;
@@ -116,7 +155,7 @@ public class ExternalRefComponent : MonoBehaviour
     public string verifyIdentity = "I am the external component";
 }
 
-public class SerializationBridgeTester : MonoBehaviour
+public class SerializationBridgeTester : MonoBehaviour, ISerializationCallbackReceiver
 {
     [Header("Bridge Data")]
     [SerializeField]
@@ -126,6 +165,11 @@ public class SerializationBridgeTester : MonoBehaviour
     public bool initializeOnAwake = true;
     public bool useChildObjectInsteadOfSelf = true;
 
+    [Header("Dictionaries")]
+    public Dictionary<string, ExternalRefComponent> identifiedExternalsPairs;
+    [SerializeField]
+    private List<ExternalRefComponent> privateIdentificationsPairs;
+
     private void Awake()
     {
         if (initializeOnAwake)
@@ -133,6 +177,18 @@ public class SerializationBridgeTester : MonoBehaviour
             InitializeFullTestData();
             initializeOnAwake = false;
         }
+        // else
+        //     Debug.Log("----------- AWAKE CALLED!! --------------");
+    }
+
+    public void OnBeforeSerialize()
+    {
+        // Debug.Log("----------- ONBEFORESERIALIZE CALLED!! --------------");
+    }
+
+    public void OnAfterDeserialize()
+    {
+        // Debug.Log("----------- ONAFTERDESERIALIZE CALLED!! --------------");
     }
 
     // Context menu allows you to trigger this in Editor to verify serialization
@@ -140,8 +196,30 @@ public class SerializationBridgeTester : MonoBehaviour
     [ContextMenu("Initialize Full Test Data")]
     public void InitializeFullTestData()
     {
+        // Setup External Reference (Ensure component exists)
+        var ext = GetComponent<ExternalRefComponent>();
+        if (ext == null)
+        {
+            GameObject objectToAttach = gameObject;
+            if (useChildObjectInsteadOfSelf)
+            {
+                objectToAttach = new GameObject("ChildObject");
+                objectToAttach.transform.SetParent(transform, false);
+            }
+            ext = objectToAttach.AddComponent<ExternalRefComponent>();
+        }
+
+        // Dictionary initialization
+        identifiedExternalsPairs = new()
+        {
+          { "DangerousExternal", ext }
+        };
+
+        privateIdentificationsPairs = [ext];
+
         // 0. Ensure Payload Exists
         payload = new BridgePayload();
+        payload.externalRef = ext;
 
         // // 1. Primitives & Boundaries
         payload.textWithSpecialChars = "Hello\nWorld\tWith \"Quotes\" & Symbols";
@@ -150,12 +228,53 @@ public class SerializationBridgeTester : MonoBehaviour
         payload.floatInfinity = float.PositiveInfinity;
         payload.floatNaN = float.NaN;
         payload.intMin = int.MinValue;
+        payload.simpleStruct = new() { x = 1, y = 2 };
 
         // 1.1. Non Serialization
         payload.thisTextMustNotBeSerialized = "Something very bad to be serialized";
         payload.thisNumberMustNotBeSerialized = 9123091;
 
-        // // 2. Enums
+        // 1.2 Generics
+        payload.genericString = new() { Value = "MyValueToBeSerialized" };
+        payload.genericInt = new() { Value = 2 };
+        payload.genericStruct = new() { Value = new() { x = 3, y = 4 } };
+        payload.valueGenericString = new() { Value = "MyValueToBeSerialized" };
+        payload.valueGenericInt = new() { Value = 2 };
+        payload.valueGenericStruct = new() { Value = new() { x = 3, y = 4 } };
+
+        // 1.3 Nullables
+        payload.nullableNumber = null;
+        payload.nullableStruct = null;
+        payload.NullableGenClass = null;
+        payload.refNullableGenClass = null;
+
+        // 1.4 Dictionaries
+        payload.stringNumPairs = new()
+        {
+            { "SomeValue", 99 },
+            {"Hello World", 2241}
+        };
+        payload.objectNumPairs = new()
+        {
+            { this, 99},
+            {transform, 1234},
+            {gameObject, 23},
+            {payload.externalRef, 1232123}
+        };
+        payload.nestedStringNumPairs = new()
+        {
+          { [], [] },
+          { ["Somevava", "AwesomeString", "This is Important@$&!*()&!*)%!!"], [22, 1224, 99] }
+        };
+        payload.objectUnityPairs = new(){
+            { this, new(23, 99, 124)}
+        };
+        payload.nestedStructsPairs = new()
+        {
+          { [new() { Value = new() { x = 3, y = 4 } }], [new() { x = 1, y = 99 }] }
+        };
+
+        // 2. Enums
         payload.standardEnum = ComplexityEnum.Complex;
         payload.flagsEnum = StatusFlags.Active | StatusFlags.Invisible;
 
@@ -169,39 +288,25 @@ public class SerializationBridgeTester : MonoBehaviour
         payload.curve = new AnimationCurve(new Keyframe(0, 0), new Keyframe(1, 1));
         payload.gradient = new Gradient();
         payload.gradient.SetKeys(
-            new GradientColorKey[] { new GradientColorKey(Color.red, 0.0f), new GradientColorKey(Color.blue, 1.0f) },
-            new GradientAlphaKey[] { new GradientAlphaKey(1.0f, 0.0f), new GradientAlphaKey(0.0f, 1.0f) }
+            [new GradientColorKey(Color.red, 0.0f), new GradientColorKey(Color.blue, 1.0f)],
+            [new GradientAlphaKey(1.0f, 0.0f), new GradientAlphaKey(0.0f, 1.0f)]
         );
 
         // 5. Unity Object References
         // Setup Self References
-        payload.selfGameObject = this.gameObject;
-        payload.selfTransform = this.transform;
+        payload.selfGameObject = gameObject;
+        payload.selfTransform = transform;
         payload.selfComponent = this;
         payload.typedReference = this;
         payload.gameObjectList = [gameObject];
 
-        // Setup External Reference (Ensure component exists)
-        var ext = GetComponent<ExternalRefComponent>();
-        if (ext == null)
-        {
-            GameObject objectToAttach = gameObject;
-            if (useChildObjectInsteadOfSelf)
-            {
-                objectToAttach = new GameObject("ChildObject");
-                objectToAttach.transform.SetParent(transform, false);
-            }
-            ext = objectToAttach.AddComponent<ExternalRefComponent>();
-        }
-        payload.externalRef = ext;
-
         // 6. Collections
-        payload.intArray = new int[] { 1, 1, 2, 3, 5, 8 };
-        payload.intList = new List<int> { 10, 20, 30 };
-        payload.emptyList = new List<string>(); // Not null, but 0 count
+        payload.intArray = [1, 1, 2, 3, 5, 8];
+        payload.intList = [10, 20, 30];
+        payload.emptyList = []; // Not null, but 0 count
         payload.explicitlyNullList = null;      // Explicitly null
 
-        // // 7. Nested Collections Wrapper
+        // 7. Nested Collections Wrapper
         payload.abstractThreeDimensionalItem = [
             [
                 [
@@ -222,9 +327,11 @@ public class SerializationBridgeTester : MonoBehaviour
         payload.singlePolyItem = new WeaponItem { id = "Sword", damage = 50 };
 
         var refWeaponItem = new WeaponItem { id = "Hammer", damage = 125 };
-        payload.polyList = new List<AbstractItem>();
-        payload.polyList.Add(new WeaponItem { id = "Axe", damage = 75 });
-        payload.polyList.Add(new PotionItem { id = "Health", healAmount = 25.5f, potionColor = Color.red });
+        payload.polyList =
+        [
+            new WeaponItem { id = "Axe", damage = 75 },
+            new PotionItem { id = "Health", healAmount = 25.5f, potionColor = Color.red, simpleStruct = new() { x = 1, y = 2 } },
+        ];
 
         // 9. Object Identity (Shared References)
         // We create ONE object and assign it to TWO fields.

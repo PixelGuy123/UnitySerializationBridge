@@ -1,5 +1,6 @@
 using UnitySerializationBridge.Core.JSON;
 using UnitySerializationBridge.Core.Serialization;
+using UnitySerializationBridge.Patches.Serialization;
 using UnitySerializationBridge.Utils;
 
 namespace UnitySerializationBridge.Core;
@@ -15,24 +16,42 @@ internal static class CacheInitializer
         AssemblyUtils.TypeIsUnityManagedCache = new();
 
         // SerializationRegistry
-        SerializationRegistry._cachedRootTypes = new();
         SerializationRegistry.RegisteredTargets = [];
 
         // Reflection Utils
-        ReflectionUtils.FieldInfoGetterCache = new(BridgeManager.sizeForMemberAccessReflectionCache.Value);
-        ReflectionUtils.FieldInfoSetterCache = new(BridgeManager.sizeForMemberAccessReflectionCache.Value);
+        int sizeForMemberAccessCache = BridgeManager.sizeForMemberAccessReflectionCache.Value;
+        ReflectionUtils.FieldInfoGetterCache = new(sizeForMemberAccessCache);
+        ReflectionUtils.FieldInfoSetterCache = new(sizeForMemberAccessCache);
         ReflectionUtils.TypeToFieldsInfoCache = new();
         ReflectionUtils.SelfActivatorConstructorCache = new();
+        ReflectionUtils.ArrayActivatorConstructorCache = new();
+        ReflectionUtils.ParameterlessActivatorConstructorCache = new();
 
         // UnityContractResolver
         UnityContractResolver.propsCache = new();
+
     }
     public static void InitializeCacheValues()
     {
         // SerializationHandler
         SerializationHandler.FieldInfoCache = new();
-        ReflectionUtils.GenericActivatorConstructorCache = new(BridgeManager.sizeForTypesReflectionCache.Value);
-        ReflectionUtils.TypeNameCache = new(BridgeManager.sizeForTypesReflectionCache.Value);
         SerializationHandler.debugEnabled = BridgeManager.enableDebugLogs.Value;
+
+        // Reflection Utils
+        int sizeForTypesCache = BridgeManager.sizeForTypesReflectionCache.Value;
+        ReflectionUtils.GenericActivatorConstructorCache = new(sizeForTypesCache);
+        ReflectionUtils.TypeNameCache = new(BridgeManager.sizeForTypesReflectionCache.Value);
+        ReflectionUtils.ConstructorCache = new(BridgeManager.sizeForTypesReflectionCache.Value);
+
+        // SerializationRegistry
+        SerializationRegistry._cachedRootTypes = new(sizeForTypesCache);
+
+        // SerializationObserver
+        SerializationObserver._typeBeforeSerializationCache = new(sizeForTypesCache);
+        SerializationObserver._typeAfterSerializationCache = new(sizeForTypesCache);
+        SerializationObserver._typeAwakeCache = new(sizeForTypesCache);
+
+        // Assembly Utils
+        AssemblyUtils.CollectionNestedElementTypesCache = new(sizeForTypesCache > 450 ? sizeForTypesCache / 10 : sizeForTypesCache / 2);
     }
 }

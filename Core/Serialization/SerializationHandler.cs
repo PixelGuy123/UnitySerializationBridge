@@ -4,14 +4,14 @@ using System.Reflection;
 using UnityEngine;
 using HarmonyLib;
 using UnitySerializationBridge.Utils;
-using UnitySerializationBridge.Interfaces;
-using UnitySerializationBridge.Patches.Serialization;
 using System.Runtime.CompilerServices;
+using System.Collections;
+using UnitySerializationBridge.Core.Models.Wrappers;
 
 namespace UnitySerializationBridge.Core.Serialization;
 
 // from Prefab -> Instance
-internal class SerializationHandler : MonoBehaviour, ISerializationCallbackReceiver
+internal class SerializationHandler : MonoBehaviour
 {
     // --- STATIC CACHES (Shared across all instances to reduce cold-start time) ---
     // Cache FieldInfos to avoid repetitive AccessTools calls
@@ -34,13 +34,8 @@ internal class SerializationHandler : MonoBehaviour, ISerializationCallbackRecei
     // --- CONFIGURATION ---
     internal static bool debugEnabled = false;
 
-    // --- INSTANCE FIELDS (Reused to prevent GC Allocations) ---
-    private readonly HashSet<ISafeSerializationCallbackReceiver> _receivers = [];
-
     // Reusable buffers for OnBeforeSerialize
-    private readonly HashSet<Component> _triggeredReceiversBuffer = [];
     private readonly Dictionary<Type, Component> _quickComponentCacheBuffer = [];
-    private bool _hasTriggeredDeserialize = false, _hasTriggeredSafePostDeserialize, _hasTriggeredOnAwake = false; // Ensures the initialization doesn't happen twice
 
     // --- SERIALIZED DATA
     [SerializeField]
@@ -50,13 +45,14 @@ internal class SerializationHandler : MonoBehaviour, ISerializationCallbackRecei
     [SerializeField]
     private List<string> _componentNames = [];
     [SerializeField]
-    private List<bool> _isFieldByReference = [];
+    private List<string> _fieldTypes = [];
     // TO BE USED WITH THE SerializationDetector
-    public List<Component> ReferencedComponents = [];
-    private HashSet<Component> _hashedReferencedComponents = []; // Collection to optimize the lookup of ReferencedComponents
+    private static readonly Dictionary<UnityEngine.Object, UnityEngine.Object> ParentToChildPairs = [];
+    // Will be used for referencing components
+    internal static void AddComponentRelationShip(UnityEngine.Object child, UnityEngine.Object parent) => ParentToChildPairs[parent] = child; // Update duplicates by default
+    internal static void CleanUpRelationShipRegistry() => ParentToChildPairs.Clear();
 
-    // BEFORE SERIALIZATION
-    public void OnBeforeSerialize()
+    public void PatchedBeforeSerializePoint()
     {
         // Already indicates this is a serialization, not an initialization
         if (debugEnabled)
@@ -68,12 +64,9 @@ internal class SerializationHandler : MonoBehaviour, ISerializationCallbackRecei
         _serializedData.Clear();
         _fields.Clear();
         _componentNames.Clear();
-        _isFieldByReference.Clear();
-        ReferencedComponents.Clear();
-        _hashedReferencedComponents.Clear();
+        _fieldTypes.Clear();
 
         // Clear buffers
-        _triggeredReceiversBuffer.Clear();
         _quickComponentCacheBuffer.Clear();
 
         // Pre-allocate list capacity if we know the target count
@@ -84,8 +77,7 @@ internal class SerializationHandler : MonoBehaviour, ISerializationCallbackRecei
             _serializedData.Capacity = count;
             _fields.Capacity = count;
             _componentNames.Capacity = count;
-            _isFieldByReference.Capacity = count;
-            ReferencedComponents.Capacity = count;
+            _fieldTypes.Capacity = count;
         }
 
         // Check all registered targets from this GameObject
@@ -106,15 +98,6 @@ internal class SerializationHandler : MonoBehaviour, ISerializationCallbackRecei
             if (debugEnabled)
                 Debug.Log($"Checking component {target.ComponentType.Name}");
 
-            // Interface Callback (Once per component instance)
-            if (rootComponent is ISafeSerializationCallbackReceiver receiver)
-            {
-                if (_triggeredReceiversBuffer.Add(rootComponent))
-                {
-                    receiver.OnBeforeSerialize();
-                }
-            }
-
             // Resolve Path
             object currentValue = rootComponent;
             var baseField = target.Field;
@@ -125,100 +108,47 @@ internal class SerializationHandler : MonoBehaviour, ISerializationCallbackRecei
             // Serialize if valid
             if (currentValue != null)
             {
-                // Serialize
-                var json = JsonUtils.ToJson(currentValue, baseField);
+                // Serialize the value
+                var json = JsonUtils.ToJson(WrapIfNecessary(currentValue, out var wrapperType));
 
                 if (debugEnabled) Debug.Log($"Serializing {compType.Name} [{baseField.Name}]. JSON:\n{json}");
 
-                _serializedData.Add(json.json);
-                _isFieldByReference.Add(json.isReference);
+                _serializedData.Add(json);
                 _fields.Add(baseField.Name);
                 _componentNames.Add(compType.AssemblyQualifiedName);
-                ReferencedComponents.Add(rootComponent);
+                _fieldTypes.Add(wrapperType?.AssemblyQualifiedName ?? baseField.FieldType.AssemblyQualifiedName);
             }
         }
 
         // Clearing buffers again, maybe it helps GC
-        _triggeredReceiversBuffer.Clear();
         _quickComponentCacheBuffer.Clear();
     }
-    public void OnAfterDeserialize()
-    {
-        // This is just cleanup
-        // Reset states
-        _receivers.Clear();
-        _hasTriggeredDeserialize = false;
-        _hasTriggeredOnAwake = false;
 
+    public void PatchedAfterDeserializePoint()
+    {
         if (debugEnabled)
         {
             Debug.Log("=== ARRAY COUNTS ===");
             Debug.Log($"SerializedData: {_serializedData.Count}");
             Debug.Log($"ComponentNames: {_componentNames.Count}");
             Debug.Log($"Fields: {_fields.Count}");
-            Debug.Log($"isFieldByReference: {_isFieldByReference.Count}");
+            Debug.Log($"FieldTypes: {_fieldTypes.Count}");
+            Debug.Log($"({gameObject.name}) ======================  DESERIALIZATION PROCESS  ======================");
         }
+
+
+        for (int i = 0; i < _serializedData.Count; i++)
+            ApplyJsonToPath(
+                ReflectionUtils.GetFastType(_componentNames[i]),
+                _fields[i],
+                _serializedData[i],
+                ReflectionUtils.GetFastType(_fieldTypes[i]));
     }
-
-
-    // Called to finalize the deserialization step
-    internal void ExecuteLifecycleCallbacks() // Restoration here!
-    {
-        if (!_hasTriggeredSafePostDeserialize)
-        {
-            if (debugEnabled)
-            {
-                Debug.Log($"({gameObject.name}) ======================  DESERIALIZATION PROCESS  ======================");
-            }
-            for (int i = 0; i < _serializedData.Count; i++)
-                ApplyJsonToPath(_componentNames[i], _fields[i], _serializedData[i], _isFieldByReference[i]);
-
-            _hasTriggeredSafePostDeserialize = true;
-        }
-
-        if (debugEnabled)
-        {
-            Debug.Log($"({gameObject.name}) ======================  LIFECYCLE EXECUTION  ======================");
-        }
-        // OnAfterDeserialize
-        if (!_hasTriggeredDeserialize)
-        {
-            foreach (var receiver in _receivers)
-            {
-                if (receiver == null) continue;
-                try { receiver.OnAfterDeserialize(); }
-                catch (Exception e) { Debug.LogException(e); }
-            }
-            _hasTriggeredDeserialize = true;
-        }
-
-        // OnAwake (Only if active)
-        if (gameObject.activeSelf && !_hasTriggeredOnAwake)
-        {
-            foreach (var receiver in _receivers)
-            {
-                if (receiver == null) continue;
-                try { receiver.OnAwake(); }
-                catch (Exception e) { Debug.LogException(e); }
-            }
-            _hasTriggeredOnAwake = true;
-        }
-        if (debugEnabled)
-        {
-            Debug.Log($"({gameObject.name}) ======================  LIFECYCLE ENDED  ======================");
-        }
-    }
-
 
     // Basically get object from JSON
-    private void ApplyJsonToPath(string compName, string fieldName, string json, bool isReference)
+    private void ApplyJsonToPath(Type compType, string fieldName, string json, Type fieldType)
     {
-        var compType = ReflectionUtils.GetFastType(compName);
-
         if (!TryGetComponent(compType, out var current)) return;
-
-        if (current is ISafeSerializationCallbackReceiver receiver)
-            _receivers.Add(receiver);
 
         // Fast Field Lookup
         // Unique hash key for the field
@@ -230,23 +160,14 @@ internal class SerializationHandler : MonoBehaviour, ISerializationCallbackRecei
 
         try
         {
-            // Optimization: If JSON is "null", skip heavy JSON parsing
+            // If JSON is "null", skip heavy JSON parsing
             if (json == "null")
             {
                 field.CreateFieldSetter()(current, null);
                 return;
             }
 
-            // Get the first ever component in the hierarchy
-            Component root = isReference ? current.GetFirstParentFromHierarchy() : null;
-
-            // If the source is here and this is reference, directly set the old field to the new one
-            if (debugEnabled && isReference) Debug.Log($"[SOURCECOMPONENT ({root.gameObject.name ?? "null"})] -> [CLONE COMPONENT: {current.gameObject.name}]");
-
-            object valueToSet = isReference && root ?
-            field.CreateFieldGetter()(root) :
-            JsonUtils.FromJsonOverwrite(field.FieldType, json);
-
+            object valueToSet = UnwrapObject(JsonUtils.FromJsonOverwrite(fieldType, json, ParentToChildPairs));
             field.CreateFieldSetter()(current, valueToSet);
         }
         catch (Exception ex)
@@ -254,4 +175,19 @@ internal class SerializationHandler : MonoBehaviour, ISerializationCallbackRecei
             if (debugEnabled) Debug.LogWarning($"Failed to deserialize {fieldName}: {ex.Message}");
         }
     }
+
+    // Make a wrapper for stuff that isn't usually serialized properly in the component-level
+    private object WrapIfNecessary(object toWrap, out Type wrapperType)
+    {
+        if (toWrap is IDictionary)
+        {
+            var wrapper = typeof(DictionaryWrapper<,>).GetGenericWrapperConstructor(toWrap.GetType().GetGenericArguments())(toWrap);
+            wrapperType = wrapper.GetType();
+            return wrapper;
+        }
+        wrapperType = null;
+        return toWrap;
+    }
+
+    private object UnwrapObject(object toUnwrap) => toUnwrap is ICollectionWrapper wrapper ? wrapper.Unwrap() : toUnwrap;
 }

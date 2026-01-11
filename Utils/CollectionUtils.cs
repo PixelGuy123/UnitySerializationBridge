@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace UnitySerializationBridge.Utils;
 
-internal static class IListUtils
+internal static class CollectionUtils
 {
     public static bool HasOfType<T>(this IList<T> list, Type t)
     {

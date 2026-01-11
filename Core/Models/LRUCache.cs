@@ -34,6 +34,8 @@ internal class LRUCache<TKey, TValue>(int maxSize)
         return false;
     }
 
+    public bool ContainsKey(TKey key) => _cache.ContainsKey(key);
+
     public void Add(TKey key, TValue value)
     {
         if (_cache.Count >= _maxSize && !_cache.ContainsKey(key))
