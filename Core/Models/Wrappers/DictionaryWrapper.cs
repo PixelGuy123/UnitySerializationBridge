@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace UnitySerializationBridge.Core.Models.Wrappers;
+namespace BepInSoft.Core.Models.Wrappers;
 
 internal struct DictionaryWrapper<TKey, TValue>(Dictionary<TKey, TValue> dic) : ICollectionWrapper
 {

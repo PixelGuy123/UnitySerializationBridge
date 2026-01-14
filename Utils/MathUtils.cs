@@ -1,6 +1,6 @@
 using System;
 
-namespace UnitySerializationBridge.Utils;
+namespace BepInSoft.Utils;
 
 internal static class MathUtils
 {
@@ -11,17 +11,11 @@ internal static class MathUtils
     /// <param name="l">The limit before turning into a logarithmic function.</param>
     /// <param name="k">The curving of the slope.</param>
     /// <returns></returns>
-    public static double CalculateCurve(double x, double l, double k = 1000.0)
+    public static double CalculateCurve(double x, double k = 1000.0)
     {
         if (k < 100.0)
             throw new ArgumentOutOfRangeException($"\'k\' is below 100 ({k}).");
-        // Linear segment (x = y)
-        if (x <= l)
-        {
-            return x;
-        }
-
         // Logarithmic segment
-        return l + k * Math.Log(1.0 + (x - l) / k);
+        return k * Math.Log(1.0 + x / k);
     }
 }

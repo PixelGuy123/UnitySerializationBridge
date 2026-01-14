@@ -3,11 +3,10 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using UnityEngine;
-using UnitySerializationBridge.Utils;
+using BepInSoft.Utils;
 using Object = UnityEngine.Object;
 
-namespace UnitySerializationBridge.Core.JSON;
+namespace BepInSoft.Core.JSON;
 
 internal class UniversalUnityReferenceValueConverter : JsonConverter
 {

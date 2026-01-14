@@ -2,24 +2,32 @@ using System.Collections.Generic;
 using System;
 using HarmonyLib;
 using UnityEngine;
-using UnitySerializationBridge.Utils;
-using UnitySerializationBridge.Core.Models;
+using BepInSoft.Utils;
+using BepInSoft.Core.Models;
 
-namespace UnitySerializationBridge.Core.Serialization;
+namespace BepInSoft.Core.Serialization;
 
 internal static class SerializationRegistry
 {
     // Weak table uses WeakReferences; if one key from Type is nulled out, this cache will release it too
     // The StrongBox is just to hold the boolean (struct) into a reference type wrapper (object)
     internal static LRUCache<Type, bool> _cachedRootTypes;
-    internal static List<BridgeTarget> RegisteredTargets;
+    internal readonly static List<BridgeTarget> RegisteredTargets = [];
 
     public static bool Register(Component component)
     {
         var componentType = component.GetType();
-        if (_cachedRootTypes.TryGetValue(componentType, out var worth)) return worth;
+        bool cacheIsAvailable = _cachedRootTypes != null; // Doesn't use Nullable extension methods because there are many cases this boolean is used for
+        if (cacheIsAvailable && _cachedRootTypes.TryGetValue(componentType, out var worth))
+        {
+            if (BridgeManager.enableDebugLogs.Value)
+                BridgeManager.logger.LogInfo($"===== Cached Root ({componentType}) is Worth? ({worth}) =====");
+            return worth;
+        }
         if (componentType.IsFromGameAssemblies())
         {
+            if (BridgeManager.enableDebugLogs.Value)
+                BridgeManager.logger.LogInfo($"===== Refused Game Assembly Root ({componentType}) =====");
             _cachedRootTypes.Add(componentType, false);
             return false;
         }
@@ -27,11 +35,10 @@ internal static class SerializationRegistry
         bool isWorth = false;
 
         if (BridgeManager.enableDebugLogs.Value)
-            Debug.Log($"===== Registering Root ({componentType.FullName}) =====");
+            BridgeManager.logger.LogInfo($"===== Registering Root ({componentType}) =====");
 
         // Start recursive scan
         // Path is initially empty because we are at the component root
-
         Type currentScanType = componentType;
 
         // Traverse up the inheritance chain to find all declared fields
@@ -40,19 +47,29 @@ internal static class SerializationRegistry
                !currentScanType.IsFromGameAssemblies())
         {
             if (BridgeManager.enableDebugLogs.Value && currentScanType != componentType)
-                Debug.Log($"===== Checking Sub-Root ({currentScanType.FullName}) =====");
+                BridgeManager.logger.LogInfo($"===== Checking Sub-Root ({currentScanType.FullName}) =====");
             // currentScanType changes to inspect fields of the base classes.
             isWorth |= ScanComponent(currentScanType);
 
-            // Add to the cache if possible
-            if (!_cachedRootTypes.ContainsKey(currentScanType))
+            // Add to the cache if possible to this branch
+            if (cacheIsAvailable && !_cachedRootTypes.ContainsKey(currentScanType))
                 _cachedRootTypes.Add(currentScanType, isWorth);
 
             if (BridgeManager.enableDebugLogs.Value)
             {
-                Debug.Log($"===== ATTEMPT TO REGISTER {currentScanType.Name} =====");
+                BridgeManager.logger.LogInfo($"===== ATTEMPT TO REGISTER {currentScanType} | Worth: {isWorth} =====");
             }
             currentScanType = currentScanType.BaseType;
+        }
+
+        // Then, update the base type to know if it was really worth or not
+        if (cacheIsAvailable && currentScanType != componentType)
+        {
+            if (BridgeManager.enableDebugLogs.Value)
+            {
+                BridgeManager.logger.LogInfo($"-> Updated ComponentType Cache!");
+            }
+            _cachedRootTypes[componentType] = isWorth;
         }
 
         return isWorth;
@@ -81,7 +98,7 @@ internal static class SerializationRegistry
                 // Skip if it's a primitive or if it isn't root
                 if (isDebugEnabled)
                 {
-                    Debug.Log($"{field.Name} SKIPPED.");
+                    BridgeManager.logger.LogInfo($"{field.Name} SKIPPED.");
                 }
                 continue;
             }
@@ -91,7 +108,8 @@ internal static class SerializationRegistry
                 continue;
 
             // Check Serializable Attribute
-            if (fieldType.IsSerializable)
+            if (fieldType.IsSerializable ||
+            field.IsDefined(typeof(SerializeReference), false)) // Check specifically for SerializeReference, as apparently Unity ignores this serializable property for these fields
             {
                 // Register Target
                 RegisteredTargets.Add(new BridgeTarget
@@ -102,7 +120,7 @@ internal static class SerializationRegistry
 
                 if (isDebugEnabled)
                 {
-                    Debug.Log($"Registered: {field.DeclaringType.Name}.{field.Name} -> {fieldType.Name}");
+                    BridgeManager.logger.LogInfo($"Registered: {field.DeclaringType.Name}.{field.Name} -> {fieldType.Name}");
                 }
                 modifiedField = true;
             }

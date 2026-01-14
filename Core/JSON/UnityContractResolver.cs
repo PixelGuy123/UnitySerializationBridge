@@ -6,14 +6,15 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using UnityEngine;
-using UnitySerializationBridge.Utils;
+using BepInSoft.Utils;
+using BepInSoft.Core.Models;
 
-namespace UnitySerializationBridge.Core.JSON;
+namespace BepInSoft.Core.JSON;
 
 internal class UnityContractResolver : DefaultContractResolver
 {
     // Cache to know what properties to look for after the first lookup
-    internal static ConditionalWeakTable<Type, IList<JsonProperty>> propsCache;
+    internal static LRUCache<Type, IList<JsonProperty>> propsCache;
 
     protected override JsonProperty CreateProperty(MemberInfo member, MemberSerialization memberSerialization)
     {
@@ -79,7 +80,7 @@ internal class UnityContractResolver : DefaultContractResolver
                     // If this is a component and it is attempting to serialize another component, Unity can already do that; the serializer ignores this
                     if (field.DeclaringType.IsUnityComponentType() && field.FieldType.IsUnityComponentType())
                     {
-                        if (BridgeManager.enableDebugLogs.Value) Debug.Log($"[{field.Name}] field has been detected as serialized private and REMOVED!");
+                        if (BridgeManager.enableDebugLogs.Value) BridgeManager.logger.LogInfo($"[{field.Name}] field has been detected as serialized private and REMOVED!");
                         continue;
                     }
 
@@ -87,11 +88,11 @@ internal class UnityContractResolver : DefaultContractResolver
                     JsonProperty jsonProp = CreateProperty(field, memberSerialization);
                     if (jsonProp == null)
                     {
-                        if (BridgeManager.enableDebugLogs.Value) Debug.Log($"[{field.Name}] field has been detected as serialized private and REMOVED!");
+                        if (BridgeManager.enableDebugLogs.Value) BridgeManager.logger.LogInfo($"[{field.Name}] field has been detected as serialized private and REMOVED!");
                         continue;
                     }
 
-                    if (BridgeManager.enableDebugLogs.Value) Debug.Log($"[{field.Name}] field has been detected as serialized private and INCLUDED!");
+                    if (BridgeManager.enableDebugLogs.Value) BridgeManager.logger.LogInfo($"[{field.Name}] field has been detected as serialized private and INCLUDED!");
 
                     // Force visibility for private fields
                     jsonProp.Readable = true;
@@ -116,7 +117,7 @@ internal class UnityContractResolver : DefaultContractResolver
 
     private IList<JsonProperty> GetPropertiesFromCache(Type type, MemberSerialization memberSerialization, out bool usedCache)
     {
-        if (propsCache != null && propsCache.TryGetValue(type, out var props))
+        if (propsCache.NullableTryGetValue(type, out var props))
         {
             usedCache = true;
             return props;
@@ -130,14 +131,14 @@ internal class UnityContractResolver : DefaultContractResolver
             // If this is a component and it's trying to serialize one, remove it from here
             if (props[i].DeclaringType.IsUnityComponentType() && props[i].PropertyType.IsUnityComponentType())
             {
-                if (BridgeManager.enableDebugLogs.Value) Debug.Log($"[{props[i].PropertyName}] has been detected and REMOVED from the properties.");
+                if (BridgeManager.enableDebugLogs.Value) BridgeManager.logger.LogInfo($"[{props[i].PropertyName}] has been detected and REMOVED from the properties.");
                 props.RemoveAt(i);
                 continue;
             }
 
-            if (BridgeManager.enableDebugLogs.Value) Debug.Log($"[{props[i].PropertyName}] has been INCLUDED.");
+            if (BridgeManager.enableDebugLogs.Value) BridgeManager.logger.LogInfo($"[{props[i].PropertyName}] has been INCLUDED.");
         }
-        propsCache.Add(type, props);
+        propsCache.NullableAdd(type, props);
 
         usedCache = false;
         return props;

@@ -3,28 +3,29 @@ using System;
 using System.Linq.Expressions;
 using HarmonyLib;
 using System.Collections.Generic;
-using UnitySerializationBridge.Core;
+using BepInSoft.Core.Models;
 using System.Runtime.CompilerServices;
 using System.Linq;
 
-namespace UnitySerializationBridge.Utils;
+namespace BepInSoft.Utils;
 
 internal static class ReflectionUtils
 {
+    internal record struct BaseTypeElementTypeItem(Type Base, Type Element);
     // Caching system
     internal static LRUCache<FieldInfo, Func<object, object>> FieldInfoGetterCache;
     internal static LRUCache<FieldInfo, Action<object, object>> FieldInfoSetterCache;
     internal static LRUCache<string, Type> TypeNameCache;
     internal static LRUCache<string, Func<object, object>> ConstructorCache;
-    internal static LRUCache<(Type, Type), Func<object>> GenericActivatorConstructorCache;
-    internal static ConditionalWeakTable<Type, Func<object>> ParameterlessActivatorConstructorCache;
-    internal static ConditionalWeakTable<Type, Func<int, Array>> ArrayActivatorConstructorCache;
-    internal static ConditionalWeakTable<Type, Func<object, object>> SelfActivatorConstructorCache;
-    internal static ConditionalWeakTable<Type, List<FieldInfo>> TypeToFieldsInfoCache;
+    internal static LRUCache<BaseTypeElementTypeItem, Func<object>> GenericActivatorConstructorCache;
+    internal static LRUCache<Type, Func<object>> ParameterlessActivatorConstructorCache;
+    internal static LRUCache<Type, Func<int, Array>> ArrayActivatorConstructorCache;
+    internal static LRUCache<Type, Func<object, object>> SelfActivatorConstructorCache;
+    internal static LRUCache<Type, List<FieldInfo>> TypeToFieldsInfoCache;
 
     public static Func<object, object> CreateFieldGetter(this FieldInfo fieldInfo)
     {
-        if (FieldInfoGetterCache != null && FieldInfoGetterCache.TryGetValue(fieldInfo, out var getter)) return getter;
+        if (FieldInfoGetterCache.NullableTryGetValue(fieldInfo, out var getter)) return getter;
 
         var instanceParam = Expression.Parameter(typeof(object), "instance");
 
@@ -40,13 +41,13 @@ internal static class ReflectionUtils
             (Expression)fieldExp;
 
         var lambda = Expression.Lambda<Func<object, object>>(resultExp, instanceParam).Compile();
-        FieldInfoGetterCache?.Add(fieldInfo, lambda);
+        FieldInfoGetterCache.NullableAdd(fieldInfo, lambda);
         return lambda;
     }
 
     public static Action<object, object> CreateFieldSetter(this FieldInfo fieldInfo)
     {
-        if (FieldInfoSetterCache != null && FieldInfoSetterCache.TryGetValue(fieldInfo, out var setter)) return setter;
+        if (FieldInfoSetterCache.NullableTryGetValue(fieldInfo, out var setter)) return setter;
 
         var instanceParam = Expression.Parameter(typeof(object), "instance");
         var valueParam = Expression.Parameter(typeof(object), "value");
@@ -62,7 +63,7 @@ internal static class ReflectionUtils
         );
 
         var lambda = Expression.Lambda<Action<object, object>>(assignExp, instanceParam, valueParam).Compile();
-        FieldInfoSetterCache?.Add(fieldInfo, lambda);
+        FieldInfoSetterCache.NullableAdd(fieldInfo, lambda);
         return lambda;
     }
 
@@ -81,7 +82,7 @@ internal static class ReflectionUtils
     // There are some Unity components that have their own constructor for duplication (new Material(Material))
     public static bool TryGetSelfActivator(this Type type, out Func<object, object> func)
     {
-        if (SelfActivatorConstructorCache != null && SelfActivatorConstructorCache.TryGetValue(type, out func)) return true;
+        if (SelfActivatorConstructorCache.NullableTryGetValue(type, out func)) return true;
 
         var selfConstructor = type.GetConstructor([type]); // Get a constructor that is itself
         if (selfConstructor == null)
@@ -98,7 +99,7 @@ internal static class ReflectionUtils
         var newExpression = Expression.New(selfConstructor, typedParameter); // (object self) => new Material((Material)self);
         // Compile expression
         func = Expression.Lambda<Func<object, object>>(newExpression, parameter).Compile();
-        SelfActivatorConstructorCache?.Add(type, func);
+        SelfActivatorConstructorCache.NullableAdd(type, func);
         return true;
     }
 
@@ -107,9 +108,9 @@ internal static class ReflectionUtils
         if (!genericDefinition.IsGenericTypeDefinition)
             throw new ArgumentException("Type must be a generic definition (e.g., List<>)");
 
-        var typeTuple = (genericDefinition, elementType);
+        var typeElement = new BaseTypeElementTypeItem(genericDefinition, elementType);
 
-        if (GenericActivatorConstructorCache != null && GenericActivatorConstructorCache.TryGetValue(typeTuple, out var func)) return func;
+        if (GenericActivatorConstructorCache.NullableTryGetValue(typeElement, out var func)) return func;
 
         // Combine them: List<> + int = List<int>
         Type concreteType = genericDefinition.MakeGenericType(elementType);
@@ -122,7 +123,7 @@ internal static class ReflectionUtils
 
         // Compile it into a reusable delegate
         func = Expression.Lambda<Func<object>>(castExp).Compile();
-        GenericActivatorConstructorCache?.Add(typeTuple, func);
+        GenericActivatorConstructorCache.NullableAdd(typeElement, func);
 
         return func;
     }
@@ -140,7 +141,7 @@ internal static class ReflectionUtils
         string cacheKey = CreateCacheKey(genericWrapper, genericParameters);
 
         // Try to get cached constructor
-        if (ConstructorCache != null && ConstructorCache.TryGetValue(cacheKey, out var cachedConstructor))
+        if (ConstructorCache.NullableTryGetValue(cacheKey, out var cachedConstructor))
             return cachedConstructor;
 
         // Create closed generic type
@@ -196,7 +197,7 @@ internal static class ReflectionUtils
 
         var compiledLambda = lambda.Compile();
 
-        ConstructorCache?.Add(cacheKey, compiledLambda);
+        ConstructorCache.NullableAdd(cacheKey, compiledLambda);
 
         // Cache and return
         return compiledLambda;
@@ -215,7 +216,7 @@ internal static class ReflectionUtils
 
     public static Func<int, Array> GetArrayConstructor(this Type elementType)
     {
-        if (ArrayActivatorConstructorCache != null && ArrayActivatorConstructorCache.TryGetValue(elementType, out var func)) return func;
+        if (ArrayActivatorConstructorCache.NullableTryGetValue(elementType, out var func)) return func;
         // Create parameter expression for the array length
         ParameterExpression lengthParam = Expression.Parameter(typeof(int), "length");
 
@@ -227,14 +228,14 @@ internal static class ReflectionUtils
 
         // Compile the lambda: (int length) => (Array)new T[length]
         func = Expression.Lambda<Func<int, Array>>(castExp, lengthParam).Compile();
-        ArrayActivatorConstructorCache?.Add(elementType, func);
+        ArrayActivatorConstructorCache.NullableAdd(elementType, func);
 
         return func;
     }
 
     public static Func<object> GetParameterlessConstructor(this Type type)
     {
-        if (ParameterlessActivatorConstructorCache != null && ParameterlessActivatorConstructorCache.TryGetValue(type, out var func)) return func;
+        if (ParameterlessActivatorConstructorCache.NullableTryGetValue(type, out var func)) return func;
         var parameterlessConstructor = type.GetConstructor(Type.EmptyTypes) ?? throw new InvalidCastException($"{type} does not contain a parameterless constructor.");
 
         // Create the Expression: () => new Type()
@@ -245,7 +246,7 @@ internal static class ReflectionUtils
 
         // Compile it into a reusable delegate
         func = Expression.Lambda<Func<object>>(castExp).Compile(); // () => (object)new Type();
-        ParameterlessActivatorConstructorCache?.Add(type, func);
+        ParameterlessActivatorConstructorCache.NullableAdd(type, func);
         return func;
     }
 

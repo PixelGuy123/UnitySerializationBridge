@@ -3,9 +3,9 @@ using System.Collections.Generic;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
-using UnitySerializationBridge.Core.JSON;
+using BepInSoft.Core.JSON;
 
-namespace UnitySerializationBridge.Utils;
+namespace BepInSoft.Utils;
 
 internal static class JsonUtils
 {

@@ -4,60 +4,152 @@ using System.Linq.Expressions;
 using System.Reflection;
 using HarmonyLib;
 using UnityEngine;
-using UnitySerializationBridge.Core;
+using BepInSoft.Core.Models;
+using MonoMod.RuntimeDetour;
+using MonoMod.Cil;
+using Mono.Cecil.Cil;
+using BepInSoft.Utils;
+using System.Collections.Concurrent;
 
-namespace UnitySerializationBridge.Patches.Serialization;
+namespace BepInSoft.Patches.Serialization;
 
 static partial class SerializationObserver
 {
-    readonly static MethodInfo _prefixReference = AccessTools.Method(typeof(SerializationObserver), nameof(StopCallAndSaveItForLater), [typeof(object)]);
-    readonly static HashSet<Type> _blockedCalls = [];
-    readonly static HashSet<MethodBase> _patchedMethods = [];
-    internal static LRUCache<Type, Action<object>> _typeBeforeSerializationCache, _typeAfterSerializationCache, _typeAwakeCache;
+    internal static Harmony harmony;
+    readonly static ConcurrentDictionary<Type, int> _blockedCalls = [];
+    readonly static Dictionary<MethodBase, ILHook> _patchedMethods = [];
+    internal static LRUCache<Type, Action<object>> _typeBeforeSerializationCache, _typeAfterSerializationCache, _typeAwakeCache, _typeOnEnableCache;
 
-    static bool StopCallAndSaveItForLater(object __instance) => !_blockedCalls.Contains(__instance.GetType());
+    static void RegisterBlockedCall(Type type)
+    {
+        if (_blockedCalls.ContainsKey(type))
+            _blockedCalls[type]++;
+        else
+            _blockedCalls[type] = 1;
+    }
+    static void RemoveBlockedCall(Type type)
+    {
+        if (!_blockedCalls.ContainsKey(type)) return;
+
+        int decrement = _blockedCalls[type] - 1;
+        if (decrement <= 0)
+            _blockedCalls.TryRemove(type, out _);
+        else
+            _blockedCalls[type] = decrement;
+    }
+
+    // IL Hooks are more prioritized than Harmony wrappers apparently
+    public static ILHook ApplyPermanentBlock(MethodBase target)
+    {
+        var hook = new ILHook(target, il =>
+        {
+            var cursor = new ILCursor(il);
+            cursor.Goto(0); // Go to beginning
+            var runOriginal = cursor.DefineLabel();
+
+            cursor.Emit(OpCodes.Ldarg_0);
+            cursor.EmitDelegate<Func<object, bool>>(obj => _blockedCalls.ContainsKey(obj.GetType()));
+
+            // If check is false, jump to the existing
+            cursor.Emit(OpCodes.Brfalse, runOriginal);
+            cursor.Emit(OpCodes.Ret);
+
+            cursor.MarkLabel(runOriginal);
+        })
+        {
+            // Apply immediately
+            Priority = Priority.First // Make sure to always be first
+        };
+        hook.Apply();
+        return hook;
+    }
 
     private static void EnsurePatched(MethodInfo method)
     {
-        if (method != null && _patchedMethods.Add(method))
+        if (method != null && !_patchedMethods.ContainsKey(method))
         {
-            harmony.Patch(method, prefix: new HarmonyMethod(_prefixReference));
+            _patchedMethods[method] = ApplyPermanentBlock(method); // Referenced inside a static dictionary, this hook will never be Garbage-Collected
         }
     }
 
-    static Action<object> GetDelegate(Type objType, string methodName, BindingFlags flags, LRUCache<Type, Action<object>> cache, bool isInterfaceMethod)
+    static Action<object> GetDelegate(Type objType, InstantiateContext context, string methodName, BindingFlags flags, LRUCache<Type, Action<object>> cache)
     {
-        if (cache.TryGetValue(objType, out var action)) return action;
+        bool debug = BridgeManager.enableDebugLogs.Value;
+        if (cache.NullableTryGetValue(objType, out var action))
+        {
+            // If the delegate returned is null, maybe the base type must have one
+            action ??= RecursiveGetDelegate();
 
-        MethodInfo method;
-        if (isInterfaceMethod)
-            method = objType.GetMethod(methodName, flags);
-        else
-            method = objType.GetMethod(methodName, flags);
+            if (action != null && context.IsContextActive)
+            {
+                RegisterBlockedCall(objType);
+                context.RegisteredCallsCache.Add(objType);
+            }
 
+            if (debug) BridgeManager.logger.LogInfo($"[{objType}] Cached Method for ({methodName}). Null? {action == null}");
+            return action;
+        }
+
+        if (debug) BridgeManager.logger.LogInfo($"[{objType}] ATTEMPT for ({methodName})");
+        MethodInfo method = objType.GetMethod(methodName, flags);
         if (method == null)
         {
-            cache.Add(objType, null);
+            if (debug) BridgeManager.logger.LogInfo($"[{objType}] NULL METHOD for ({methodName})");
+            cache.NullableAdd(objType, null);
+            if (RecursiveGetDelegate() != null && context.IsContextActive)
+            {
+                RegisterBlockedCall(objType);
+                context.RegisteredCallsCache.Add(objType);
+            }
             return null;
         }
 
-        // Patch once and only once
+        // Register calls
+        if (context.IsContextActive)
+        {
+            RegisterBlockedCall(objType);
+            context.RegisteredCallsCache.Add(objType);
+        }
+
+        // Patch the method
         EnsurePatched(method);
 
+        // (object obj)
         var parameter = Expression.Parameter(typeof(object), "obj");
+        // (object obj) => (objType)obj
         var convert = Expression.Convert(parameter, objType);
+        // (object obj) => ((objType)obj).method()
         var call = Expression.Call(convert, method);
+        // Compile last example
         var lambda = Expression.Lambda<Action<object>>(call, parameter).Compile();
 
-        cache.Add(objType, lambda);
+        cache.NullableAdd(objType, lambda);
+
+        // Recursive loop to get every type possible
+        if (debug) BridgeManager.logger.LogInfo($"[{objType}] WORKS for ({methodName})");
+        RecursiveGetDelegate();
+
         return lambda;
+
+        Action<object> RecursiveGetDelegate()
+        {
+            // Recursive loop to get every type possible
+            var parentType = objType.BaseType;
+            if (parentType != null && !parentType.IsFromGameAssemblies())
+                return GetDelegate(parentType, context, methodName, flags, cache);
+            return null;
+        }
     }
-    static Action<object> SanitizeOnBeforeSerializationAndGetDelegate(Type objType) =>
-        GetDelegate(objType, nameof(ISerializationCallbackReceiver.OnBeforeSerialize), BindingFlags.Instance | BindingFlags.Public, _typeBeforeSerializationCache, true);
+    static Action<object> SanitizeOnBeforeSerializationAndGetDelegate(Type objType, InstantiateContext context) =>
+        GetDelegate(objType, context, nameof(ISerializationCallbackReceiver.OnBeforeSerialize), BindingFlags.Instance | BindingFlags.Public, _typeBeforeSerializationCache);
 
-    static Action<object> SanitizeOnAfterSerializationAndGetDelegate(Type objType) =>
-        GetDelegate(objType, nameof(ISerializationCallbackReceiver.OnAfterDeserialize), BindingFlags.Instance | BindingFlags.Public, _typeAfterSerializationCache, true);
+    static Action<object> SanitizeOnAfterSerializationAndGetDelegate(Type objType, InstantiateContext context) =>
+        GetDelegate(objType, context, nameof(ISerializationCallbackReceiver.OnAfterDeserialize), BindingFlags.Instance | BindingFlags.Public, _typeAfterSerializationCache);
 
-    static Action<object> SanitizeAwakeSerializationAndGetDelegate(Type objType) =>
-        GetDelegate(objType, "Awake", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public, _typeAwakeCache, false);
+    static Action<object>
+    SanitizeAwakeSerializationAndGetDelegate(Type objType, InstantiateContext context) =>
+        GetDelegate(objType, context, "Awake", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public, _typeAwakeCache);
+
+    static Action<object> SanitizeOnEnableSerializationAndGetDelegate(Type objType, InstantiateContext context) =>
+        GetDelegate(objType, context, "OnEnable", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public, _typeOnEnableCache);
 }

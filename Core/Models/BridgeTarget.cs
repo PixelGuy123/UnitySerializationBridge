@@ -1,7 +1,7 @@
 using System;
 using System.Reflection;
 
-namespace UnitySerializationBridge.Core.Models;
+namespace BepInSoft.Core.Models;
 
 // Holds metadata about which Field in which Component needs bridging
 internal struct BridgeTarget

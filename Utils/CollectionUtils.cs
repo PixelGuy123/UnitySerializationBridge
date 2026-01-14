@@ -1,7 +1,8 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 
-namespace UnitySerializationBridge.Utils;
+namespace BepInSoft.Utils;
 
 internal static class CollectionUtils
 {
@@ -13,5 +14,12 @@ internal static class CollectionUtils
                 return true;
         }
         return false;
+    }
+
+    public static void LogCollection<T>(this IList<T> list, string collectionName = null)
+    {
+        BridgeManager.logger.LogInfo($"==== {(string.IsNullOrEmpty(collectionName) ? typeof(T).Name : collectionName)} COLLECTION OVERVIEW ====");
+        for (int i = 0; i < list.Count; i++)
+            BridgeManager.logger.LogInfo($"[{i}] -- ({list[i]})");
     }
 }

@@ -1,165 +1,18 @@
 #if DEBUG
-
 using System;
 using System.Collections.Generic;
+using BepInSoft;
 using UnityEngine;
-
-
-// Edge Case: Enums and Flags
-[Serializable]
-public enum ComplexityEnum { Simple = 0, Complex = 100, Invalid = 999 }
-
-[Flags]
-[Serializable]
-public enum StatusFlags { None = 0, Active = 1 << 0, Paused = 1 << 1, Invisible = 1 << 2 }
-
-// Edge Case: Generic Classes and Structs
-[Serializable]
-public class GenericClass<T>
-{
-    public T Value;
-}
-
-[Serializable]
-public struct GenericStruct<T>
-{
-    public T Value;
-}
-
-// Edge Case: Polymorphism (SerializeReference)
-
-[Serializable]
-public abstract class AbstractItem
-{
-    public string id;
-}
-
-[Serializable]
-public class WeaponItem : AbstractItem
-{
-    public int damage;
-}
-
-[Serializable]
-public class PotionItem : AbstractItem
-{
-    public float healAmount;
-    public Color potionColor;
-    public SimpleStruct simpleStruct;
-}
-
-// Edge Case: Nested Structs vs Classes
-[Serializable]
-public struct SimpleStruct
-{
-    public int x;
-    public int y;
-}
-
-// Edge Case: Circular Dependencies (Pure C#)
-[Serializable]
-public class CircularNode
-{
-    public int id;
-    public CircularNode next; // Reference to another node
-}
-
-// MAIN PAYLOAD
-[Serializable]
-public class BridgePayload
-{
-    [Header("Primitives & Boundaries")]
-    public string textWithSpecialChars; // Test: "Test\nNewLines\tTabs"
-    public string emptyString;          // Test: ""
-    public string nullString;           // Test: null (should remain null)
-    public float floatInfinity;         // Test: float.PositiveInfinity
-    public float floatNaN;              // Test: float.NaN
-    public int intMin;                  // Test: int.MinValue
-    public SimpleStruct simpleStruct;
-
-
-    [Header("Generic Classes")]
-    public GenericClass<string> genericString;
-    public GenericClass<int> genericInt;
-    public GenericClass<SimpleStruct> genericStruct;
-    public GenericStruct<string> valueGenericString;
-    public GenericStruct<int> valueGenericInt;
-    public GenericStruct<SimpleStruct> valueGenericStruct;
-
-    [Header("Unserialize Support")]
-    [NonSerialized]
-    public string thisTextMustNotBeSerialized;
-    [NonSerialized]
-    public int thisNumberMustNotBeSerialized;
-
-    [Header("Nullable Types")]
-    public int? nullableNumber;
-    public SimpleStruct? nullableStruct;
-    [SerializeReference] public GenericClass<int> refNullableGenClass; // Should technically work like nullableStruct
-    public GenericClass<int> NullableGenClass; // Should technically work like nullableStruct
-
-    [Header("Dictionaries")]
-    public Dictionary<string, int> stringNumPairs;
-    public Dictionary<UnityEngine.Object, int> objectNumPairs;
-    public Dictionary<UnityEngine.Object, UnityEngine.Vector3> objectUnityPairs;
-    public Dictionary<List<string>, List<int>> nestedStringNumPairs;
-    public Dictionary<List<GenericStruct<SimpleStruct>>, List<SimpleStruct>> nestedStructsPairs;
-
-
-    [Header("Enums")]
-    public ComplexityEnum standardEnum;
-    public StatusFlags flagsEnum;
-
-    [Header("Unity Value Types")]
-    public Vector3 nonZeroVector;
-    public Quaternion specificRotation;
-    public LayerMask specificLayer;
-    public Color32 byteColor;           // Test: Precision loss vs Color
-
-    [Header("Unity Reference Types (Internal)")]
-    public AnimationCurve curve;        // Complex internal object
-    public Gradient gradient;           // Complex internal object
-
-    [Header("Unity Object References (Scene/Assets)")]
-    public GameObject selfGameObject;   // Ref to holding GO
-    public Transform selfTransform;     // Ref to holding Transform
-    public MonoBehaviour selfComponent; // Ref to holding Script
-    public SerializationBridgeTester typedReference; // Typed Ref
-    public ExternalRefComponent externalRef; // Ref to another script on same or diff GO
-    public List<GameObject> gameObjectList;
-
-    [Header("Collections")]
-    public int[] intArray;
-    public List<int> intList;
-    public List<string> emptyList;      // Initialized but count 0
-    public List<string> explicitlyNullList; // Actually null
-
-    [Header("Nested Collections Wrapper")]
-    [SerializeReference] public List<List<UnityEngine.Object>> nestedListReferences;
-    public List<List<List<AbstractItem>>> abstractThreeDimensionalItem;
-
-    [Header("Polymorphism ([SerializeReference])")]
-    [SerializeReference] public AbstractItem singlePolyItem;
-    [SerializeReference] public List<AbstractItem> polyList;
-
-    [Header("Object Identity (Shared Refs)")]
-    [SerializeReference] public AbstractItem sharedRefA;
-    [SerializeReference] public AbstractItem sharedRefB; // Must point to same instance as A]
-
-    [Header("Pure C# Circular Reference")]
-    [SerializeReference] public CircularNode circularRoot;
-}
-
-public class ExternalRefComponent : MonoBehaviour
-{
-    public string verifyIdentity = "I am the external component";
-}
 
 public class SerializationBridgeTester : MonoBehaviour, ISerializationCallbackReceiver
 {
     [Header("Bridge Data")]
     [SerializeField]
     private BridgePayload payload;
+    [SerializeField]
+    private NonSerializablePayload nonSerializablePayload;
+    [SerializeReference]
+    private NonSerializablePayload refNonSerializablePayload;
 
     [Header("Debug")]
     public bool initializeOnAwake = true;
@@ -175,20 +28,26 @@ public class SerializationBridgeTester : MonoBehaviour, ISerializationCallbackRe
         if (initializeOnAwake)
         {
             InitializeFullTestData();
-            initializeOnAwake = false;
         }
         // else
-        //     Debug.Log("----------- AWAKE CALLED!! --------------");
+        // BridgeManager.logger.LogInfo("----------- AWAKE CALLED!! --------------");
+    }
+
+    private void OnEnable()
+    {
+        // if (!initializeOnAwake)
+        // BridgeManager.logger.LogInfo("----------- OnEnabled CALLED!! --------------");
+        initializeOnAwake = false;
     }
 
     public void OnBeforeSerialize()
     {
-        // Debug.Log("----------- ONBEFORESERIALIZE CALLED!! --------------");
+        // BridgeManager.logger.LogInfo("----------- ONBEFORESERIALIZE CALLED!! --------------");
     }
 
     public void OnAfterDeserialize()
     {
-        // Debug.Log("----------- ONAFTERDESERIALIZE CALLED!! --------------");
+        // BridgeManager.logger.LogInfo("----------- ONAFTERDESERIALIZE CALLED!! --------------");
     }
 
     // Context menu allows you to trigger this in Editor to verify serialization
@@ -196,6 +55,8 @@ public class SerializationBridgeTester : MonoBehaviour, ISerializationCallbackRe
     [ContextMenu("Initialize Full Test Data")]
     public void InitializeFullTestData()
     {
+        nonSerializablePayload = new() { someField = 213 };
+        refNonSerializablePayload = new() { someField = 213 };
         // Setup External Reference (Ensure component exists)
         var ext = GetComponent<ExternalRefComponent>();
         if (ext == null)
@@ -323,6 +184,14 @@ public class SerializationBridgeTester : MonoBehaviour, ISerializationCallbackRe
             ]
         ];
 
+        // 8. Nested Multi-Dimensional Arrays
+        InitializeThreeJaggedArray();
+        InitializeTwoDimensionalArray();
+        InitializeMultiListArray();
+        InitializeMultiListMultiArray();
+        InitializeListOfGameObjectArrayArray();
+        InitializeTwoDGameObjectArray();
+
         // 8. Polymorphism
         payload.singlePolyItem = new WeaponItem { id = "Sword", damage = 50 };
 
@@ -348,24 +217,24 @@ public class SerializationBridgeTester : MonoBehaviour, ISerializationCallbackRe
         child.next = root; // The cycle
         payload.circularRoot = root;
 
-        if (!UnitySerializationBridge.BridgeManager.enableDebugLogs.Value) return;
-        Debug.Log($"[BridgeTester] Data Initialized. Shared Ref Identity: {ReferenceEquals(payload.sharedRefA, payload.sharedRefB)}");
+        if (!BridgeManager.enableDebugLogs.Value) return;
+        BridgeManager.logger.LogInfo($"[BridgeTester] Data Initialized. Shared Ref Identity: {ReferenceEquals(payload.sharedRefA, payload.sharedRefB)}");
     }
 
     // Test Logic to verify the bridge didn't break anything
     [ContextMenu("Verify Integrity")]
     public void VerifyIntegrity()
     {
-        if (!UnitySerializationBridge.BridgeManager.enableDebugLogs.Value) return;
+        if (!BridgeManager.enableDebugLogs.Value) return;
         if (payload == null)
         {
-            Debug.LogError("Payload is null!");
+            BridgeManager.logger.LogError("Payload is null!");
             return;
         }
 
         // 1. Identity Check
         bool identityPreserved = ReferenceEquals(payload.sharedRefA, payload.sharedRefB);
-        Debug.Log($"Identity Preserved (Shared Refs): {identityPreserved}");
+        BridgeManager.logger.LogInfo($"Identity Preserved (Shared Refs): {identityPreserved}");
 
         // 2. Circular Check
         bool circlePreserved = false;
@@ -373,19 +242,267 @@ public class SerializationBridgeTester : MonoBehaviour, ISerializationCallbackRe
         {
             circlePreserved = ReferenceEquals(payload.circularRoot, payload.circularRoot.next.next);
         }
-        Debug.Log($"Circular Reference Preserved: {circlePreserved}");
+        BridgeManager.logger.LogInfo($"Circular Reference Preserved: {circlePreserved}");
 
         // 3. Unity Object Check
         bool unityRefPreserved = payload.selfGameObject == this.gameObject;
-        Debug.Log($"Unity Object Reference (Self): {unityRefPreserved}");
+        BridgeManager.logger.LogInfo($"Unity Object Reference (Self): {unityRefPreserved}");
 
         bool extRefPreserved = payload.externalRef != null;
-        Debug.Log($"Unity External Reference: {extRefPreserved}");
+        BridgeManager.logger.LogInfo($"Unity External Reference: {extRefPreserved}");
 
         // 4. Null vs Empty List Check
         bool nullPreserved = payload.explicitlyNullList == null;
         bool emptyPreserved = payload.emptyList != null && payload.emptyList.Count == 0;
-        Debug.Log($"Null List Correct: {nullPreserved} | Empty List Correct: {emptyPreserved}");
+        BridgeManager.logger.LogInfo($"Null List Correct: {nullPreserved} | Empty List Correct: {emptyPreserved}");
     }
+
+
+    private void InitializeThreeJaggedArray()
+    {
+        payload.threeJaggedArray = new int[3][][];
+
+        // First dimension
+        payload.threeJaggedArray[0] = new int[2][];
+        payload.threeJaggedArray[0][0] = new int[] { 1, 2, 3 };
+        payload.threeJaggedArray[0][1] = new int[] { 4, 5 };
+
+        // Second dimension
+        payload.threeJaggedArray[1] = new int[3][];
+        payload.threeJaggedArray[1][0] = new int[] { 6, 7 };
+        payload.threeJaggedArray[1][1] = new int[] { 8, 9, 10, 11 };
+        payload.threeJaggedArray[1][2] = new int[] { 12 };
+
+        // Third dimension
+        payload.threeJaggedArray[2] = new int[1][];
+        payload.threeJaggedArray[2][0] = new int[] { 13, 14, 15, 16, 17 };
+    }
+
+    private void InitializeTwoDimensionalArray()
+    {
+        payload.twoDimensionalArray = new int[4][];
+        payload.twoDimensionalArray[0] = new int[] { 1, 2, 3 };
+        payload.twoDimensionalArray[1] = new int[] { 4, 5, 6, 7 };
+        payload.twoDimensionalArray[2] = new int[] { 8, 9 };
+        payload.twoDimensionalArray[3] = new int[] { 10, 11, 12, 13, 14 };
+    }
+
+    private void InitializeMultiListArray()
+    {
+        payload.multiListArray = new List<string>[3];
+
+        payload.multiListArray[0] = new List<string> { "Apple", "Banana", "Cherry" };
+        payload.multiListArray[1] = new List<string> { "Dog", "Cat" };
+        payload.multiListArray[2] = new List<string> { "Red", "Green", "Blue", "Yellow" };
+    }
+
+    private void InitializeMultiListMultiArray()
+    {
+        payload.multiListMultiArray = new List<int[][]>();
+
+        // First jagged array
+        int[][] firstArray = new int[2][];
+        firstArray[0] = new int[] { 1, 2 };
+        firstArray[1] = new int[] { 3, 4, 5 };
+
+        // Second jagged array
+        int[][] secondArray = new int[3][];
+        secondArray[0] = new int[] { 6, 7, 8 };
+        secondArray[1] = new int[] { 9 };
+        secondArray[2] = new int[] { 10, 11, 12, 13 };
+
+        payload.multiListMultiArray.Add(firstArray);
+        payload.multiListMultiArray.Add(secondArray);
+    }
+
+    private void InitializeListOfGameObjectArrayArray()
+    {
+        payload.listOfGameObjectArrayArray = new List<GameObject[]>[2];
+
+        // First list
+        payload.listOfGameObjectArrayArray[0] = new List<GameObject[]>();
+        GameObject[] array1 = new GameObject[] { gameObject, gameObject };
+        GameObject[] array2 = new GameObject[] { gameObject };
+        payload.listOfGameObjectArrayArray[0].Add(array1);
+        payload.listOfGameObjectArrayArray[0].Add(array2);
+
+        // Second list
+        payload.listOfGameObjectArrayArray[1] = new List<GameObject[]>();
+        GameObject[] array3 = new GameObject[] { gameObject, gameObject, gameObject };
+        payload.listOfGameObjectArrayArray[1].Add(array3);
+    }
+
+    private void InitializeTwoDGameObjectArray()
+    {
+        payload.twoDGameObjectArray = new GameObject[3][];
+
+        payload.twoDGameObjectArray[0] = new GameObject[] { gameObject, gameObject };
+        payload.twoDGameObjectArray[1] = new GameObject[] { gameObject, gameObject, gameObject };
+        payload.twoDGameObjectArray[2] = new GameObject[] { gameObject };
+    }
+}
+
+
+// Edge Case: Enums and Flags
+[Serializable]
+public enum ComplexityEnum { Simple = 0, Complex = 100, Invalid = 999 }
+
+[Flags]
+[Serializable]
+public enum StatusFlags { None = 0, Active = 1 << 0, Paused = 1 << 1, Invisible = 1 << 2 }
+
+// Edge Case: Generic Classes and Structs
+[Serializable]
+public class GenericClass<T>
+{
+    public T Value;
+}
+
+[Serializable]
+public struct GenericStruct<T>
+{
+    public T Value;
+}
+
+// Edge Case: Polymorphism (SerializeReference)
+
+[Serializable]
+public abstract class AbstractItem
+{
+    public string id;
+}
+
+[Serializable]
+public class WeaponItem : AbstractItem
+{
+    public int damage;
+}
+
+[Serializable]
+public class PotionItem : AbstractItem
+{
+    public float healAmount;
+    public Color potionColor;
+    public SimpleStruct simpleStruct;
+}
+
+// Edge Case: Nested Structs vs Classes
+[Serializable]
+public struct SimpleStruct
+{
+    public int x;
+    public int y;
+}
+
+// Edge Case: Circular Dependencies (Pure C#)
+[Serializable]
+public class CircularNode
+{
+    public int id;
+    public CircularNode next; // Reference to another node
+}
+
+// MAIN PAYLOADS
+public class NonSerializablePayload // Expected to be null by default
+{
+    public int someField;
+}
+
+[Serializable]
+public class BridgePayload
+{
+    [Header("Primitives & Boundaries")]
+    public string textWithSpecialChars; // Test: "Test\nNewLines\tTabs"
+    public string emptyString;          // Test: ""
+    public string nullString;           // Test: null (should remain null)
+    public float floatInfinity;         // Test: float.PositiveInfinity
+    public float floatNaN;              // Test: float.NaN
+    public int intMin;                  // Test: int.MinValue
+    public SimpleStruct simpleStruct;
+
+    [Header("Multi-dimensional Arrays")]
+    public int[][][] threeJaggedArray;
+    public int[][] twoDimensionalArray;
+    public List<string>[] multiListArray;
+    public List<int[][]> multiListMultiArray;
+    public List<GameObject[]>[] listOfGameObjectArrayArray;
+    public GameObject[][] twoDGameObjectArray;
+
+
+    [Header("Generic Classes")]
+    public GenericClass<string> genericString;
+    public GenericClass<int> genericInt;
+    public GenericClass<SimpleStruct> genericStruct;
+    public GenericStruct<string> valueGenericString;
+    public GenericStruct<int> valueGenericInt;
+    public GenericStruct<SimpleStruct> valueGenericStruct;
+
+    [Header("Unserialize Support")]
+    [NonSerialized]
+    public string thisTextMustNotBeSerialized;
+    [NonSerialized]
+    public int thisNumberMustNotBeSerialized;
+
+    [Header("Nullable Types")]
+    public int? nullableNumber;
+    public SimpleStruct? nullableStruct;
+    [SerializeReference] public GenericClass<int> refNullableGenClass; // Should technically work like nullableStruct
+    public GenericClass<int> NullableGenClass; // Should technically work like nullableStruct
+
+    [Header("Dictionaries")]
+    public Dictionary<string, int> stringNumPairs;
+    public Dictionary<UnityEngine.Object, int> objectNumPairs;
+    public Dictionary<UnityEngine.Object, UnityEngine.Vector3> objectUnityPairs;
+    public Dictionary<List<string>, List<int>> nestedStringNumPairs;
+    public Dictionary<List<GenericStruct<SimpleStruct>>, List<SimpleStruct>> nestedStructsPairs;
+
+
+    [Header("Enums")]
+    public ComplexityEnum standardEnum;
+    public StatusFlags flagsEnum;
+
+    [Header("Unity Value Types")]
+    public Vector3 nonZeroVector;
+    public Quaternion specificRotation;
+    public LayerMask specificLayer;
+    public Color32 byteColor;           // Test: Precision loss vs Color
+
+    [Header("Unity Reference Types (Internal)")]
+    public AnimationCurve curve;        // Complex internal object
+    public Gradient gradient;           // Complex internal object
+
+    [Header("Unity Object References (Scene/Assets)")]
+    public GameObject selfGameObject;   // Ref to holding GO
+    public Transform selfTransform;     // Ref to holding Transform
+    public MonoBehaviour selfComponent; // Ref to holding Script
+    public SerializationBridgeTester typedReference; // Typed Ref
+    public ExternalRefComponent externalRef; // Ref to another script on same or diff GO
+    public List<GameObject> gameObjectList;
+
+    [Header("Collections")]
+    public int[] intArray;
+    public List<int> intList;
+    public List<string> emptyList;      // Initialized but count 0
+    public List<string> explicitlyNullList; // Actually null
+
+    [Header("Nested Collections Wrapper")]
+    [SerializeReference] public List<List<UnityEngine.Object>> nestedListReferences;
+    public List<List<List<AbstractItem>>> abstractThreeDimensionalItem;
+
+    [Header("Polymorphism ([SerializeReference])")]
+    [SerializeReference] public AbstractItem singlePolyItem;
+    [SerializeReference] public List<AbstractItem> polyList;
+
+    [Header("Object Identity (Shared Refs)")]
+    [SerializeReference] public AbstractItem sharedRefA;
+    [SerializeReference] public AbstractItem sharedRefB; // Must point to same instance as A]
+
+    [Header("Pure C# Circular Reference")]
+    [SerializeReference] public CircularNode circularRoot;
+}
+
+public class ExternalRefComponent : MonoBehaviour
+{
+    public string verifyIdentity = "I am the external component";
 }
 #endif

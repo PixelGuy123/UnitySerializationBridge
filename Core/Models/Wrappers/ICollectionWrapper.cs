@@ -1,4 +1,4 @@
-namespace UnitySerializationBridge.Core.Models.Wrappers;
+namespace BepInSoft.Core.Models.Wrappers;
 
 internal interface ICollectionWrapper
 {

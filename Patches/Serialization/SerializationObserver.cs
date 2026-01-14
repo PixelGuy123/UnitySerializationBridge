@@ -1,186 +1,242 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Linq;
 using HarmonyLib;
 using UnityEngine;
-using UnitySerializationBridge.Core.Serialization;
-
+using BepInSoft.Core.Serialization;
 using Object = UnityEngine.Object;
+using BepInSoft.Utils;
 
-namespace UnitySerializationBridge.Patches.Serialization;
+namespace BepInSoft.Patches.Serialization;
 
 [HarmonyPatch]
 static partial class SerializationObserver
 {
-    // Resources here
-    internal static Harmony harmony;
-    struct ComponentMetadata
+    // To prevent the errors with threading
+    internal static int mainThreadId;
+    // Snapshot of a GameObject's components at the time of Prefix
+    private class GameObjectSnapshot
     {
-        public Component component;
-        public bool worthRegistering;
+        public GameObject OriginalGo;
+        public List<Component> OriginalComponents = new(16);
+        // Maps Type -> List of components of that type to handle duplicates
+        public Dictionary<Type, List<Component>> TypedComponents = [];
+
+        public void RegisterComponent(Component comp)
+        {
+            OriginalComponents.Add(comp);
+            var type = comp.GetType();
+            if (!TypedComponents.TryGetValue(type, out var list))
+            {
+                list = new(4);
+                TypedComponents[type] = list;
+            }
+            list.Add(comp);
+        }
     }
 
-    private static readonly List<Component> _compBuffer = new(128);
-    private static readonly List<ComponentMetadata> _prefixMetaCache = new(512);
-    private static readonly List<int> _compCountsPerGo = new(128);
-    private static readonly List<SerializationHandler> _handlerCache = new(128);
+    private class InstantiateContext
+    {
+        // Key is the relative path
+        public GameObject OriginalRoot;
+        public Dictionary<string, GameObjectSnapshot> PathToSnapshot = [];
+        public List<SerializationHandler> HandlerCache = new(32);
+        public List<Type> RegisteredCallsCache = [];
+        public bool WorthProcessing;
+        public bool IsContextActive = true;
+    }
 
-    // Patches below
     [HarmonyTargetMethods]
     static IEnumerable<MethodInfo> GetInstantiationMethods()
     {
-        // Pre-filter methods to avoid reflection during runtime
-        var methods = AccessTools.GetDeclaredMethods(typeof(Object));
-        foreach (var m in methods)
-        {
-            if (m.Name != nameof(Object.Instantiate)) continue;
-            if (m.IsGenericMethodDefinition) yield return m.MakeGenericMethod(typeof(Object));
-            else yield return m;
-        }
+        return AccessTools.GetDeclaredMethods(typeof(Object))
+            .Where(m => m.Name == nameof(Object.Instantiate))
+            .Select(m => m.IsGenericMethodDefinition ? m.MakeGenericMethod(typeof(Object)) : m);
     }
-
 
     [HarmonyPrefix]
-    static void TriggerBridgeCallbacks(Object original, out bool __state)
+    [HarmonyPriority(Priority.First)]
+    static void TriggerBridgeCallbacks(Object original, out InstantiateContext __state)
     {
-        __state = false;
-        GameObject rootGo = original as GameObject ?? (original as Component)?.gameObject;
-        if (!rootGo) return;
-
-        _prefixMetaCache.Clear();
-        _compCountsPerGo.Clear();
-        _blockedCalls.Clear();
-
-        // One-pass hierarchy traversal
-        var transforms = rootGo.GetComponentsInChildren<Transform>(true);
-
-        for (int i = 0; i < transforms.Length; i++)
+        if (mainThreadId != System.Threading.Thread.CurrentThread.ManagedThreadId)  // Instantiate calls only occurs on main thread according to the tests I've done
+                                                                                    // This is to prevent any crashes with Unity when calling this method at multiple threads
         {
-            // Get the child gameObject
-            var childGo = transforms[i].gameObject;
-            _compBuffer.Clear();
-
-            // Add the components to the buffer
-            childGo.GetComponents(_compBuffer);
-            _compCountsPerGo.Add(_compBuffer.Count);
-
-            for (int j = 0; j < _compBuffer.Count; j++)
-            {
-                // Register the component
-                var comp = _compBuffer[j];
-                bool worth = SerializationRegistry.Register(comp);
-                __state |= worth;
-
-                // Add the component to the metadata cache
-                _prefixMetaCache.Add(new ComponentMetadata { component = comp, worthRegistering = worth });
-
-                if (worth) // If it is worth, then we try to sanitize it
-                {
-                    Type type = comp.GetType();
-                    if (comp is MonoBehaviour)
-                        SanitizeAwakeSerializationAndGetDelegate(type);
-
-                    if (comp is ISerializationCallbackReceiver)
-                    {
-                        var beforeDelegate = SanitizeOnBeforeSerializationAndGetDelegate(type);
-                        beforeDelegate?.Invoke(comp);
-                        SanitizeOnAfterSerializationAndGetDelegate(type);
-                        _blockedCalls.Add(type);
-                    }
-                }
-            }
-
-            if (__state) // if it is worth globally, add the handler
-            {
-                if (!childGo.TryGetComponent<SerializationHandler>(out var handler))
-                {
-                    handler = childGo.AddComponent<SerializationHandler>();
-
-                    // Includes the handler as a new component too
-                    _prefixMetaCache.Add(new ComponentMetadata() { component = handler, worthRegistering = false });
-                    _compCountsPerGo[_compCountsPerGo.Count - 1]++;
-                }
-                // Debug.Log("Serialize point");
-                handler.PatchedBeforeSerializePoint();
-            }
-        }
-    }
-
-    // SUMMARY: After SerializationHandler serializes everything and gets passed to the child, it should deserialize everything on this child
-    // and call the necessary methods
-    [HarmonyPostfix]
-    static void GetChildGOAndCacheIt(Object original, object __result, bool __state)
-    {
-        if (!__state || __result == null)
-        {
-            _blockedCalls.Clear();
+            BridgeManager.logger.LogWarning($"Different Thread ID ({System.Threading.Thread.CurrentThread.ManagedThreadId}) detected! Skipping Instantiation Patch of {original.ToString()}...");
+            __state = null;
             return;
         }
 
-        GameObject childRoot = __result as GameObject ?? (__result as Component)?.gameObject;
-        GameObject parentRoot = original as GameObject ?? (original as Component)?.gameObject;
+        __state = new InstantiateContext();
+        GameObject rootGo = original as GameObject ?? (original as Component)?.gameObject;
+        if (!rootGo) return;
 
-        if (!childRoot || !parentRoot) return;
-
-        var childTransforms = childRoot.GetComponentsInChildren<Transform>(true);
-        _handlerCache.Clear();
-        SerializationHandler.CleanUpRelationShipRegistry();
-
-        int metaIdx = 0;
-        for (int i = 0; i < childTransforms.Length; i++)
+        // Assign original root
+        __state.OriginalRoot = rootGo;
+        // Snapshot the original hierarchy
+        var transforms = rootGo.GetComponentsInChildren<Transform>(true);
+        foreach (var t in transforms)
         {
-            var childGo = childTransforms[i].gameObject;
-            if (!childGo.TryGetComponent<SerializationHandler>(out var handler))
-                handler = childGo.AddComponent<SerializationHandler>();
-            _handlerCache.Add(handler);
+            string path = GetRelativePath(rootGo.transform, t);
+            var snap = new GameObjectSnapshot { OriginalGo = t.gameObject };
+            var comps = t.GetComponents<Component>();
 
-            _compBuffer.Clear();
-            childGo.GetComponents(_compBuffer);
-
-            // Structure validation
-            if (_compBuffer.Count != _compCountsPerGo[i])
-                throw new InvalidOperationException("Prefab structure mismatch during instantiation.");
-
-            for (int j = 0; j < _compBuffer.Count; j++)
+            foreach (var comp in comps)
             {
-                var childComp = _compBuffer[j];
-                var meta = _prefixMetaCache[metaIdx];
+                if (!comp) continue;
+                snap.RegisterComponent(comp);
 
-                if (childComp is not SerializationHandler)
+                Type type = comp.GetType();
+                if (type.IsFromGameAssemblies()) continue;
+
+                // Mark for processing if custom components are found
+                __state.WorthProcessing |= SerializationRegistry.Register(comp);
+
+                if (typeof(Behaviour).IsAssignableFrom(type))
                 {
-                    SerializationHandler.AddComponentRelationShip(childComp, meta.component);
+                    SanitizeAwakeSerializationAndGetDelegate(type, __state);
+                    SanitizeOnEnableSerializationAndGetDelegate(type, __state);
                 }
-                metaIdx++;
+
+                if (typeof(ISerializationCallbackReceiver).IsAssignableFrom(type))
+                {
+                    SanitizeOnBeforeSerializationAndGetDelegate(type, __state)?.Invoke(comp);
+                    SanitizeOnAfterSerializationAndGetDelegate(type, __state);
+                }
+            }
+            __state.PathToSnapshot[path] = snap;
+        }
+
+
+        // Add SerializationHandler to the original if needed 
+        if (__state.WorthProcessing)
+        {
+            foreach (var kvp in __state.PathToSnapshot)
+            {
+                var snap = kvp.Value;
+                if (!snap.OriginalGo.TryGetComponent<SerializationHandler>(out var handler))
+                {
+                    // Register to the snapshot this handler
+                    handler = snap.OriginalGo.AddComponent<SerializationHandler>();
+                    snap.RegisterComponent(handler);
+                }
+                handler.PatchedBeforeSerializePoint();
             }
         }
 
-        SerializationHandler.AddComponentRelationShip(childRoot, parentRoot);
+    }
 
-        // Debug.Log("Deserialize point");
-        // Execute handlers
-        for (int i = 0; i < _handlerCache.Count; i++)
-            _handlerCache[i].PatchedAfterDeserializePoint();
+    [HarmonyPostfix]
+    static void GetChildGOAndCacheIt(object __result, InstantiateContext __state)
+    {
+        // If this is null, it's most probably because another thread was here
+        if (__state == null) return;
 
-        // Finalize lifecycle
-        _blockedCalls.Clear();
-        for (int i = 0; i < _prefixMetaCache.Count; i++)
+        GameObject childRoot = __result as GameObject ?? (__result as Component)?.gameObject;
+        if (!childRoot || __state.PathToSnapshot.Count == 0)
         {
-            var meta = _prefixMetaCache[i];
-            if (!meta.worthRegistering) continue;
-
-            Type t = meta.component.GetType();
-            if (meta.component is ISerializationCallbackReceiver)
-                SanitizeOnAfterSerializationAndGetDelegate(t)?.Invoke(meta.component);
-
-            if (meta.component is MonoBehaviour)
-                SanitizeAwakeSerializationAndGetDelegate(t)?.Invoke(meta.component);
+            CleanupContext(__state);
+            return;
         }
 
-        // Cleanup
-        _prefixMetaCache.Clear();
-        _compCountsPerGo.Clear();
+        List<(Component Clone, Component Original)> matchResult = new(48);
+        var resultTransforms = childRoot.GetComponentsInChildren<Transform>(true);
         SerializationHandler.CleanUpRelationShipRegistry();
-        // Debug.Log("Finish point");
+
+        foreach (var targetTrans in resultTransforms)
+        {
+            string path = GetRelativePath(childRoot.transform, targetTrans);
+
+            // If Unity added an extra GameObject (like a UI helper), 
+            // it won't be in our snapshot. We just skip it.
+            if (!__state.PathToSnapshot.TryGetValue(path, out var sourceSnap))
+                continue;
+
+            var targetGo = targetTrans.gameObject;
+            var targetComps = targetGo.GetComponents<Component>();
+            var typeCounters = new Dictionary<Type, int>();
+
+            foreach (var cloneComp in targetComps)
+            {
+                if (!cloneComp) continue;
+                Type t = cloneComp.GetType();
+
+                typeCounters.TryGetValue(t, out int occurrence);
+                typeCounters[t] = occurrence + 1;
+
+                // Map components by type and occurrence
+                if (sourceSnap.TypedComponents.TryGetValue(t, out var sourceList) && occurrence < sourceList.Count)
+                {
+                    var originalComp = sourceList[occurrence];
+                    matchResult.Add((cloneComp, originalComp));
+
+                    if (__state.WorthProcessing && cloneComp is not SerializationHandler)
+                        SerializationHandler.AddComponentRelationShip(cloneComp, originalComp);
+                }
+
+                if (cloneComp is SerializationHandler handler)
+                {
+                    __state.HandlerCache.Add(handler);
+                }
+            }
+        }
+
+        // Run Deserialization
+        if (__state.WorthProcessing)
+        {
+            if (__state.OriginalRoot)
+                SerializationHandler.AddComponentRelationShip(childRoot, __state.OriginalRoot);
+            foreach (var handler in __state.HandlerCache)
+                handler.PatchedAfterDeserializePoint();
+        }
+        CleanupContext(__state);
+
+        // Trigger Lifecycle methods in order
+        bool debug = BridgeManager.enableDebugLogs.Value;
+        foreach (var (clone, originalComp) in matchResult)
+        {
+            Type t = clone.GetType();
+            if (t.IsFromGameAssemblies()) continue;
+
+            if (clone is ISerializationCallbackReceiver)
+            {
+                if (debug) BridgeManager.logger.LogInfo($"[{t}] OnAfterDeserialization");
+                SanitizeOnAfterSerializationAndGetDelegate(t, __state)?.Invoke(clone);
+            }
+
+            if (clone is Behaviour b && childRoot.activeInHierarchy)
+            {
+                if (debug) BridgeManager.logger.LogInfo($"[{t}] Awake");
+                SanitizeAwakeSerializationAndGetDelegate(t, __state)?.Invoke(clone);
+
+                if (b.enabled)
+                {
+                    if (debug) BridgeManager.logger.LogInfo($"[{t}] OnEnable");
+                    SanitizeOnEnableSerializationAndGetDelegate(t, __state)?.Invoke(clone);
+                }
+            }
+        }
+
+        SerializationHandler.CleanUpRelationShipRegistry();
+    }
+
+    private static void CleanupContext(InstantiateContext context)
+    {
+        context.IsContextActive = false;
+        foreach (var type in context.RegisteredCallsCache)
+            RemoveBlockedCall(type);
+    }
+
+    private static string GetRelativePath(Transform root, Transform target)
+    {
+        if (root == target) return "root";
+        var path = new System.Text.StringBuilder(target.GetSiblingIndex().ToString());
+        var parent = target.parent;
+        while (parent != null && parent != root)
+        {
+            path.Insert(0, parent.GetSiblingIndex() + "/");
+            parent = parent.parent;
+        }
+        return path.ToString();
     }
 }
-

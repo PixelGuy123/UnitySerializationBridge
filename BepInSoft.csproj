@@ -2,12 +2,12 @@
 
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
-    <AssemblyName>UnitySerializationBridge</AssemblyName>
+    <AssemblyName>BepInSoft</AssemblyName>
     <Description>A library to make an easy bridge between other plugins and Unity's serialization system.</Description>
     <Version>1.0.0</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
-    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!--<GenerateDocumentationFile>true</GenerateDocumentationFile>-->
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
@@ -17,17 +17,23 @@
     <PackageReference Include="BepInEx.PluginInfoProps" Version="1.*" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="UnityEngine.Modules" Version="2020.3.38" />
-	<PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.2" PrivateAssets="all" />
+	  <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.2" PrivateAssets="all" />
   </ItemGroup>
+
+  <!-- <ItemGroup>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>Libs/Newtonsoft.Json.dll</HintPath>
+    </Reference>
+  </ItemGroup> -->
   
-  <ItemGroup Condition="'$(TargetFramework.TrimEnd(`0123456789`))' == 'net'">
-    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.2" PrivateAssets="all" />
-  </ItemGroup>
   
   <Target Name="PostBuild" AfterTargets="Publish">
     <Message Text="Executing CopyDLLs task" Importance="High" />
     <Exec Command="ilrepack /lib:&quot;$(PublishDir)&quot; /out:&quot;$(PublishDir)$(AssemblyName).dll&quot; &quot;$(PublishDir)$(AssemblyName).dll&quot; &quot;$(PublishDir)Newtonsoft.Json.dll&quot;" /> <!-- Merge files -->
-    <Copy SourceFiles="$(PublishDir)$(AssemblyName).dll;$(PublishDir)$(AssemblyName).pdb;$(PublishDir)$(AssemblyName).xml" DestinationFolder="/home/pixeldesktop/.steam/steam/steamapps/common/Baldi's Basics Plus/BepInEx/plugins" />
+    <!-- Includes docs file -->
+    <!--<Copy SourceFiles="$(PublishDir)$(AssemblyName).dll;$(PublishDir)$(AssemblyName).pdb;$(PublishDir)$(AssemblyName).xml" DestinationFolder="/home/pixeldesktop/.steam/steam/steamapps/common/Baldi's Basics Plus/BepInEx/plugins" />-->
+    <!-- Does NOT Includes docs file-->
+    <Copy SourceFiles="$(PublishDir)$(AssemblyName).dll;$(PublishDir)$(AssemblyName).pdb" DestinationFolder="/home/pixeldesktop/.steam/steam/steamapps/common/Baldi's Basics Plus/BepInEx/plugins" />
     <Message Text="Copied build files" Importance="High" />
   </Target>
 </Project>

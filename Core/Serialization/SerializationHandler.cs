@@ -3,24 +3,22 @@ using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
 using HarmonyLib;
-using UnitySerializationBridge.Utils;
-using System.Runtime.CompilerServices;
+using BepInSoft.Utils;
 using System.Collections;
-using UnitySerializationBridge.Core.Models.Wrappers;
+using BepInSoft.Core.Models.Wrappers;
+using BepInSoft.Core.Models;
 
-namespace UnitySerializationBridge.Core.Serialization;
+namespace BepInSoft.Core.Serialization;
 
 // from Prefab -> Instance
 internal class SerializationHandler : MonoBehaviour
 {
     // --- STATIC CACHES (Shared across all instances to reduce cold-start time) ---
     // Cache FieldInfos to avoid repetitive AccessTools calls
-    internal static ConditionalWeakTable<Type, Dictionary<string, FieldInfo>> FieldInfoCache;
+    internal static LRUCache<Type, Dictionary<string, FieldInfo>> FieldInfoCache;
     internal static FieldInfo GetFastField(Type compType, string fieldName)
     {
-        // If no cache, use normal call
-        if (FieldInfoCache == null)
-            return AccessTools.Field(compType, fieldName);
+        if (FieldInfoCache == null) return AccessTools.Field(compType, fieldName);
 
         var fields = FieldInfoCache.GetValue(compType, t => []);
         if (!fields.TryGetValue(fieldName, out var field))
@@ -57,7 +55,7 @@ internal class SerializationHandler : MonoBehaviour
         // Already indicates this is a serialization, not an initialization
         if (debugEnabled)
         {
-            Debug.Log($"({gameObject.name}) ======================  SERIALIZATION PROCESS  ======================");
+            BridgeManager.logger.LogInfo($"({gameObject.name}) ======================  SERIALIZATION PROCESS  ======================");
         }
 
         // Clear up the data
@@ -96,7 +94,7 @@ internal class SerializationHandler : MonoBehaviour
             }
 
             if (debugEnabled)
-                Debug.Log($"Checking component {target.ComponentType.Name}");
+                BridgeManager.logger.LogInfo($"Checking component {target.ComponentType.Name}");
 
             // Resolve Path
             object currentValue = rootComponent;
@@ -111,7 +109,7 @@ internal class SerializationHandler : MonoBehaviour
                 // Serialize the value
                 var json = JsonUtils.ToJson(WrapIfNecessary(currentValue, out var wrapperType));
 
-                if (debugEnabled) Debug.Log($"Serializing {compType.Name} [{baseField.Name}]. JSON:\n{json}");
+                if (debugEnabled) BridgeManager.logger.LogInfo($"Serializing {compType.Name} [{baseField.Name}]. JSON:\n{json}");
 
                 _serializedData.Add(json);
                 _fields.Add(baseField.Name);
@@ -128,12 +126,12 @@ internal class SerializationHandler : MonoBehaviour
     {
         if (debugEnabled)
         {
-            Debug.Log("=== ARRAY COUNTS ===");
-            Debug.Log($"SerializedData: {_serializedData.Count}");
-            Debug.Log($"ComponentNames: {_componentNames.Count}");
-            Debug.Log($"Fields: {_fields.Count}");
-            Debug.Log($"FieldTypes: {_fieldTypes.Count}");
-            Debug.Log($"({gameObject.name}) ======================  DESERIALIZATION PROCESS  ======================");
+            BridgeManager.logger.LogInfo("=== ARRAY COUNTS ===");
+            BridgeManager.logger.LogInfo($"SerializedData: {_serializedData.Count}");
+            BridgeManager.logger.LogInfo($"ComponentNames: {_componentNames.Count}");
+            BridgeManager.logger.LogInfo($"Fields: {_fields.Count}");
+            BridgeManager.logger.LogInfo($"FieldTypes: {_fieldTypes.Count}");
+            BridgeManager.logger.LogInfo($"({gameObject.name}) ======================  DESERIALIZATION PROCESS  ======================");
         }
 
 
@@ -156,7 +154,7 @@ internal class SerializationHandler : MonoBehaviour
         if (field == null) return;
 
         if (debugEnabled)
-            Debug.Log($"Deserializing: {fieldName} with JSON:\n{json}");
+            BridgeManager.logger.LogInfo($"Deserializing: {fieldName} with JSON:\n{json}");
 
         try
         {
@@ -172,7 +170,7 @@ internal class SerializationHandler : MonoBehaviour
         }
         catch (Exception ex)
         {
-            if (debugEnabled) Debug.LogWarning($"Failed to deserialize {fieldName}: {ex.Message}");
+            if (debugEnabled) BridgeManager.logger.LogWarning($"Failed to deserialize {fieldName}: {ex.Message}");
         }
     }
 
